@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Python
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Build output
+frontend/dist/
+dist/
+dist-ssr/
+
+# Local databases (auto-created/seeded by schema_init.py on startup)
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment files (keep .env.example tracked)
+.env
+**/.env
+!.env.example
+
+# Local tooling / editor
+.claude/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# OS / logs
+.DS_Store
+*.log
+logs/
+*.local

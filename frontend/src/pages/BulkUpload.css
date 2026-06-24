@@ -1,0 +1,105 @@
+.bulk-upload-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.bulk-upload-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+.bulk-upload-form input[type='file'] {
+  min-height: 42px;
+  padding: 0.42rem 0.56rem;
+}
+
+.bulk-sheet-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.bulk-sheet-tabs button {
+  min-height: 34px;
+  padding: 0.32rem 0.74rem;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 92, 112, 0.24);
+  color: #38495f;
+  background: #ffffff;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.bulk-sheet-tabs button.active {
+  border-color: rgba(45, 117, 209, 0.35);
+  color: #1e4f93;
+  background: linear-gradient(120deg, rgba(45, 117, 209, 0.2) 0%, rgba(34, 197, 192, 0.15) 100%);
+}
+
+.bulk-sheet-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.72rem;
+  font-size: 0.82rem;
+  color: #5f7086;
+}
+
+.bulk-upload-table .bulk-col-sn {
+  width: 78px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.bulk-upload-table td.bulk-cell-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bulk-sheet-truncated {
+  border-radius: 999px;
+  padding: 0.21rem 0.56rem;
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  color: #885700;
+  background: #fff2d1;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.bulk-alert {
+  margin-top: 0.85rem;
+}
+
+.bulk-alert-success {
+  border-color: #a8e5c9;
+  background: #e5f8ee;
+  color: #106c47;
+}
+
+.bulk-alert-warning {
+  border-color: #f3d690;
+  background: #fff6df;
+  color: #885700;
+}
+
+.bulk-alert-error {
+  border-color: #efb5b5;
+  background: #fdeeee;
+  color: #9e2e2e;
+}
+
+.bulk-note {
+  align-self: center;
+  color: #8c5700;
+  font-size: 0.8rem;
+  font-weight: 700;
+}

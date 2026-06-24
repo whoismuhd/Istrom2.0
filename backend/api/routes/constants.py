@@ -1,0 +1,26 @@
+"""Constants and reference data routes."""
+from fastapi import APIRouter
+from constants import (
+    PROPERTY_TYPES,
+    BUILDING_SUBTYPE_OPTIONS,
+    BUILDING_SUBTYPE_LABELS,
+    CONSTRUCTION_SECTIONS,
+    BUDGET_5_SUBCATEGORIES,
+    CATEGORY_OPTIONS,
+    BUDGET_CATEGORIES,
+)
+
+router = APIRouter(prefix="/constants", tags=["constants"])
+
+
+@router.get("")
+def get_constants():
+    return {
+        "PROPERTY_TYPES": PROPERTY_TYPES,
+        "BUILDING_SUBTYPE_OPTIONS": BUILDING_SUBTYPE_OPTIONS,
+        "BUILDING_SUBTYPE_LABELS": BUILDING_SUBTYPE_LABELS,
+        "CONSTRUCTION_SECTIONS": CONSTRUCTION_SECTIONS,
+        "BUDGET_5_SUBCATEGORIES": BUDGET_5_SUBCATEGORIES,
+        "CATEGORY_OPTIONS": CATEGORY_OPTIONS,
+        "BUDGET_CATEGORIES": BUDGET_CATEGORIES,
+    }
