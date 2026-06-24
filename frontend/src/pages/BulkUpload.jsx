@@ -36,7 +36,7 @@ export default function BulkUpload() {
     mutationFn: (rows) =>
       api.bulkUpload.commit({ projectSite, skipExisting, rows }),
     onSuccess: (res) => {
-      queryClient.invalidateQueries(['items']);
+      queryClient.invalidateQueries({ queryKey: ['items'] });
       setStep(3);
       setFeedback({
         type: 'success',

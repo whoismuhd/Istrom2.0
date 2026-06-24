@@ -171,9 +171,15 @@ against the DB and **no** writes.
   - Input: JSON `{ project_site, skip_existing, rows: [BulkUploadItemRow…] }`
     (the admin-resolved rows from the review screen).
   - **Re-validates every row server-side** against the same constraints Manual
-    Entry enforces (`category ∈ CATEGORY_OPTIONS`, `building_type ∈
-    PROPERTY_TYPES`, `section ∈ CONSTRUCTION_SECTIONS`, `qty/unit_cost ≥ 0`,
-    project-site scope). The client payload is never trusted blindly.
+    Entry's `create_item` effectively enforces: `category ∈ CATEGORY_OPTIONS`,
+    `building_type ∈ PROPERTY_TYPES`, `qty/unit_cost ≥ 0`, non-empty `name`, and
+    project-site scope. The client payload is never trusted blindly. **`section`,
+    `budget`, and `grp` are stored as free text and are NOT constrained to a
+    fixed list** — `create_item` does not validate them either, and real
+    workbooks carry many section spellings outside `CONSTRUCTION_SECTIONS`, so
+    rejecting them would block import of otherwise-valid rows. (Revised after the
+    final code review; original draft over-specified strict `section`
+    validation.)
   - Inserts items exactly like `create_item`: continues the `IT-{n}` sequence,
     sets every field, enforces scope. **Single transaction** — any error rolls
     back the whole import (never a half-import).

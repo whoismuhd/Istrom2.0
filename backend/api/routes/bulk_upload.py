@@ -28,7 +28,6 @@ from api.schemas import (
     WorkbookItemPreview,
 )
 from api.services.budget_workbook_parser import parse_budget_workbook
-from constants import CATEGORY_OPTIONS as _CATS, PROPERTY_TYPES as _BTYPES
 
 router = APIRouter(prefix="/bulk-upload", tags=["bulk-upload"])
 
@@ -658,13 +657,20 @@ def commit_bulk_upload(
         raise HTTPException(422, "project_site is required")
     effective_site = enforce_project_site_scope(user, site) or site
 
-    valid_btypes = {b for b in _BTYPES if b}
+    valid_btypes = {b for b in PROPERTY_TYPES if b}
     existing = _existing_item_keys(db, effective_site)
 
+    # NOTE: `section` and `budget`/`grp` are intentionally NOT constrained to a
+    # fixed list here. Manual Entry's create_item stores section/budget as free
+    # text without validation, and real budget workbooks carry many section
+    # spellings outside CONSTRUCTION_SECTIONS — rejecting them would block import
+    # of valid rows. Parity with manual entry is the goal, so only the fields
+    # create_item effectively constrains (category, building_type, non-negative
+    # numbers, required name) are validated.
     to_insert = []
     skipped = []
     for idx, row in enumerate(payload.rows, start=1):
-        if row.category not in _CATS:
+        if row.category not in CATEGORY_OPTIONS:
             raise HTTPException(422, f"Row {idx}: invalid category '{row.category}'")
         if row.building_type not in valid_btypes:
             raise HTTPException(422, f"Row {idx}: invalid building_type '{row.building_type}'")
