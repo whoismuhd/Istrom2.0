@@ -209,12 +209,51 @@ class BulkUploadPreviewOut(BaseModel):
 
 
 class BulkUploadCommitIn(BaseModel):
+    project_site: str
+    skip_existing: bool = True
     rows: List[BulkUploadItemRow]
 
 
 class BulkUploadCommitOut(BaseModel):
     inserted_count: int
     created_codes: List[str]
+    skipped: List[str] = []
+
+
+class WorkbookItemPreview(BaseModel):
+    name: str
+    qty: float
+    unit: str
+    unit_cost: float
+    category: str
+    grp: str
+    section: str
+    section_matched: bool
+    budget: str
+    sheet_name: str
+    row_number: int
+    duplicate: bool = False
+    warnings: List[str] = []
+
+
+class WorkbookSheetPreview(BaseModel):
+    sheet_name: str
+    building_type: str
+    building_type_confident: bool
+    budget_number: Optional[int]
+    budget_confident: bool
+    item_count: int
+    warnings: List[str] = []
+    items: List[WorkbookItemPreview]
+
+
+class WorkbookAnalyzeOut(BaseModel):
+    file_name: str
+    project_site: str
+    sheet_count: int
+    item_count: int
+    duplicate_count: int
+    sheets: List[WorkbookSheetPreview]
 
 
 class BulkUploadTemplateOut(BaseModel):
