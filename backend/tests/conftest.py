@@ -53,7 +53,10 @@ def client(test_db, admin_user):
     from api.main import app
     from api.dependencies import get_current_user, get_current_admin
 
-    app.dependency_overrides[get_db] = lambda: iter([test_db])
+    def _override_get_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_current_user] = lambda: admin_user
     app.dependency_overrides[get_current_admin] = lambda: admin_user
     with TestClient(app) as c:

@@ -23,7 +23,12 @@ from api.schemas import (
     BulkUploadTemplateOut,
     FileViewerOut,
     FileViewerSheetOut,
+    WorkbookAnalyzeOut,
+    WorkbookSheetPreview,
+    WorkbookItemPreview,
 )
+from api.services.budget_workbook_parser import parse_budget_workbook
+from constants import CATEGORY_OPTIONS as _CATS, PROPERTY_TYPES as _BTYPES
 
 router = APIRouter(prefix="/bulk-upload", tags=["bulk-upload"])
 
@@ -564,16 +569,138 @@ async def preview_bulk_upload(
     )
 
 
+def _existing_item_keys(db: Session, project_site: str) -> set:
+    keys = set()
+    q = db.query(Item.name, Item.budget, Item.section, Item.building_type).filter(
+        Item.project_site == project_site
+    )
+    for name, budget, section, building_type in q.all():
+        keys.add((
+            _clean_str(name).lower(),
+            _clean_str(budget).lower(),
+            _clean_str(section).lower(),
+            _clean_str(building_type).lower(),
+        ))
+    return keys
+
+
+@router.post("/analyze", response_model=WorkbookAnalyzeOut)
+async def analyze_budget_workbook(
+    file: UploadFile = File(...),
+    project_site: str = Form(...),
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_admin),
+):
+    site = _clean_str(project_site)
+    if not site:
+        raise HTTPException(422, "project_site is required")
+    effective_site = enforce_project_site_scope(user, site) or site
+
+    file_name = _clean_str(file.filename) or "upload.xlsx"
+    if not file_name.lower().endswith(".xlsx"):
+        raise HTTPException(422, "Please upload a .xlsx budget workbook")
+    content = await file.read()
+    if not content:
+        raise HTTPException(422, "Uploaded file is empty")
+    if len(content) > MAX_FILE_BYTES:
+        raise HTTPException(422, f"File too large. Max size is {MAX_FILE_BYTES // (1024 * 1024)}MB")
+
+    parsed = parse_budget_workbook(content)
+    existing = _existing_item_keys(db, effective_site)
+
+    sheet_previews: List[WorkbookSheetPreview] = []
+    total_items = 0
+    total_dupes = 0
+    for sheet in parsed.sheets:
+        item_previews: List[WorkbookItemPreview] = []
+        for it in sheet.items:
+            dup_key = (it.name.lower(), it.budget.lower(), it.section.lower(), _clean_str(sheet.building_type).lower())
+            is_dup = dup_key in existing
+            if is_dup:
+                total_dupes += 1
+            total_items += 1
+            item_previews.append(WorkbookItemPreview(
+                name=it.name, qty=it.qty, unit=it.unit, unit_cost=it.unit_cost,
+                category=it.category, grp=it.grp, section=it.section,
+                section_matched=it.section_matched, budget=it.budget,
+                sheet_name=it.sheet_name, row_number=it.row_number,
+                duplicate=is_dup, warnings=it.warnings,
+            ))
+        sheet_previews.append(WorkbookSheetPreview(
+            sheet_name=sheet.sheet_name,
+            building_type=sheet.building_type,
+            building_type_confident=sheet.building_type_confident,
+            budget_number=sheet.budget_number,
+            budget_confident=sheet.budget_confident,
+            item_count=len(item_previews),
+            warnings=sheet.warnings,
+            items=item_previews,
+        ))
+
+    return WorkbookAnalyzeOut(
+        file_name=file_name,
+        project_site=effective_site,
+        sheet_count=len(sheet_previews),
+        item_count=total_items,
+        duplicate_count=total_dupes,
+        sheets=sheet_previews,
+    )
+
+
 @router.post("/commit", response_model=BulkUploadCommitOut)
 def commit_bulk_upload(
     payload: BulkUploadCommitIn,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_admin),
 ):
-    _ = payload
-    _ = db
-    _ = user
-    raise HTTPException(
-        status_code=410,
-        detail="Bulk import is disabled. Upload is viewer-only and will not modify inventory.",
-    )
+    site = _clean_str(payload.project_site)
+    if not site:
+        raise HTTPException(422, "project_site is required")
+    effective_site = enforce_project_site_scope(user, site) or site
+
+    valid_btypes = {b for b in _BTYPES if b}
+    existing = _existing_item_keys(db, effective_site)
+
+    to_insert = []
+    skipped = []
+    for idx, row in enumerate(payload.rows, start=1):
+        if row.category not in _CATS:
+            raise HTTPException(422, f"Row {idx}: invalid category '{row.category}'")
+        if row.building_type not in valid_btypes:
+            raise HTTPException(422, f"Row {idx}: invalid building_type '{row.building_type}'")
+        if row.qty < 0 or row.unit_cost < 0:
+            raise HTTPException(422, f"Row {idx}: qty and unit_cost must be non-negative")
+        if not _clean_str(row.name):
+            raise HTTPException(422, f"Row {idx}: name is required")
+
+        dup_key = (
+            row.name.lower(), _clean_str(row.budget).lower(),
+            _clean_str(row.section).lower(), _clean_str(row.building_type).lower(),
+        )
+        if payload.skip_existing and dup_key in existing:
+            skipped.append(f"{row.name} ({row.building_type})")
+            continue
+        existing.add(dup_key)
+        to_insert.append(row)
+
+    last_item = db.query(Item.id).order_by(Item.id.desc()).first()
+    next_num = (last_item[0] if last_item else 0) + 1
+
+    created_codes = []
+    try:
+        for row in to_insert:
+            code = f"IT-{next_num}"
+            db.add(Item(
+                code=code, name=row.name, category=row.category, unit=row.unit,
+                qty=row.qty, unit_cost=row.unit_cost, budget=row.budget,
+                section=row.section, grp=row.grp, building_type=row.building_type,
+                project_site=effective_site,
+            ))
+            created_codes.append(code)
+            next_num += 1
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return BulkUploadCommitOut(inserted_count=len(created_codes), created_codes=created_codes, skipped=skipped)
