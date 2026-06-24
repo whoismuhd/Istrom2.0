@@ -46,6 +46,7 @@ GROUP_MAP = {
     "material": ("General Materials", "Materials"),
     "material_only": ("General Materials", "Materials"),
     "materials": ("General Materials", "Materials"),
+    "materials_only": ("General Materials", "Materials"),
     "general_materials": ("General Materials", "Materials"),
     "woods": ("Woods", "Materials"),
     "wood": ("Woods", "Materials"),
@@ -125,9 +126,17 @@ def _to_number(value) -> float:
         return 0.0
 
 
+# The item-name column is headed differently across budgets: "MATERIALS" in
+# budgets 1-4, "DESCRITION"/"DESCRIPTION" (sic) in budgets 5-7.
+_NAME_HEADER_TOKENS = {
+    "materials", "material", "description", "descriptions",
+    "descrition", "descritions", "item", "items", "particulars",
+}
+
+
 def _is_table_header(row) -> bool:
     cells = {_norm(c) for c in row if c is not None}
-    return "materials" in cells and bool(cells & {"qty", "rate", "amount"})
+    return bool(cells & _NAME_HEADER_TOKENS) and bool(cells & {"qty", "rate", "amount"})
 
 
 def _budget_string(building_type, budget_number, grp) -> str:

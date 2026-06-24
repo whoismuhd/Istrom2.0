@@ -128,6 +128,31 @@ def test_parse_skips_non_item_sheets():
     assert [s.sheet_name for s in wb.sheets] == ["FLATS BGT 1"]
 
 
+def test_parse_recognizes_description_header_variant():
+    # Budget 5/6/7 sheets label the name column "DESCRITION" (sic) with an
+    # "S/NO" serial header and no UNIT header, though unit data is still in col D.
+    rows = [
+        ["BUDGET 5"],
+        ["FASCIA CASTING, ROOF SLAB AND BLOCK WORK ABOVE ROOF BEAM"],
+        ["MATERIALS ONLY"],
+        ["S/NO", "DESCRITION", "QTY", "RATE", "AMOUNT"],
+        [1, "PLANKS(1X12)", 50, "length", 2700, 135000],
+        [2, "3'' NAILS", 1, "bag", 31000, 31000],
+    ]
+    content = _wb([("D15,18,37-40 BGT 5", rows)])
+    wb = parse_budget_workbook(content)
+    assert len(wb.sheets) == 1
+    sheet = wb.sheets[0]
+    assert sheet.building_type == "Fully-detached"
+    assert sheet.budget_number == 5
+    assert [i.name for i in sheet.items] == ["PLANKS(1X12)", "3'' NAILS"]
+    first = sheet.items[0]
+    assert first.qty == 50
+    assert first.unit == "length"
+    assert first.unit_cost == 2700
+    assert first.grp == "General Materials"
+
+
 def test_parse_tracks_multiple_sections_per_sheet():
     rows = [
         ["SUBSTRUCTURE; (EXCAVATION TO DPC LEVEL)"],
