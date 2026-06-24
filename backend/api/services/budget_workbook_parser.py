@@ -59,6 +59,14 @@ GROUP_MAP = {
     "labour": ("Labour", "Labour"),
     "labour_only": ("Labour", "Labour"),
     "labor": ("Labour", "Labour"),
+    "labor_only": ("Labour", "Labour"),
+    # Combined material+labour blocks (common on the Terraces sheets). No
+    # dedicated budget group exists, so bucket under General Materials but mark
+    # the item category as the combined "Material/Labour".
+    "material_labour": ("General Materials", "Material/Labour"),
+    "materials_labour": ("General Materials", "Material/Labour"),
+    "material_labor": ("General Materials", "Material/Labour"),
+    "materials_labor": ("General Materials", "Material/Labour"),
 }
 
 _SECTION_CANON = {_norm(s): s for s in CONSTRUCTION_SECTIONS}
@@ -195,9 +203,14 @@ def parse_budget_workbook(content: bytes) -> ParsedWorkbook:
                     current_grp, current_category = a_grp_hit
                     continue
 
-            # Totals / summary rows (checked before section so a "TOTAL" line in
-            # col A is never mistaken for a section header).
+            # Totals / summary / separator rows (checked before section so none of
+            # them are mistaken for a section header).
             if "total" in _norm(b_text) or "total" in _norm(a_text):
+                continue
+            if "summary" in _norm(a_text) or "summary" in _norm(b_text):
+                continue
+            # Punctuation-only separator rows (e.g. "……..") normalize to empty.
+            if a_text and not b_text and not _norm(a_text):
                 continue
 
             # Section header: a lone, non-numeric text cell in col A with empty

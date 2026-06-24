@@ -153,6 +153,33 @@ def test_parse_recognizes_description_header_variant():
     assert first.grp == "General Materials"
 
 
+def test_group_mapping_spelling_and_combined_variants():
+    assert group_to_grp_category("LABOR ONLY") == ("Labour", "Labour")
+    assert group_to_grp_category("MATERIALS/LABOR") == ("General Materials", "Material/Labour")
+    assert group_to_grp_category("MATERIAL/LABOUR") == ("General Materials", "Material/Labour")
+
+
+def test_parse_skips_summary_and_separator_rows():
+    rows = [
+        ["SUBSTRUCTURE; (EXCAVATION TO DPC LEVEL)"],
+        ["MATERIALS/LABOR"],
+        ["S/N", "MATERIALS", "QTY", "UNIT", "RATE", "AMOUNT"],
+        [1, "EXCAVATION", 5, "m3", 1000, 5000],
+        ["……..", None, None, None, None, None],
+        ["BUDGET SUMMARY", None, None, None, None, None],
+        [2, "FILLING", 3, "m3", 800, 2400],
+    ]
+    content = _wb([("FLATS BGT 1", rows)])
+    wb = parse_budget_workbook(content)
+    items = wb.sheets[0].items
+    assert [i.name for i in items] == ["EXCAVATION", "FILLING"]
+    # The combined header set category to Material/Labour with a real group, and
+    # the junk rows did NOT overwrite the section.
+    assert items[0].category == "Material/Labour"
+    assert items[0].grp == "General Materials"
+    assert items[1].section == "SUBSTRUCTURE (EXCAVATION TO DPC LEVEL)"
+
+
 def test_parse_tracks_multiple_sections_per_sheet():
     rows = [
         ["SUBSTRUCTURE; (EXCAVATION TO DPC LEVEL)"],
