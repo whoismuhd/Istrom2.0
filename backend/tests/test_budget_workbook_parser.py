@@ -126,3 +126,24 @@ def test_parse_skips_non_item_sheets():
     ])
     wb = parse_budget_workbook(content)
     assert [s.sheet_name for s in wb.sheets] == ["FLATS BGT 1"]
+
+
+def test_parse_tracks_multiple_sections_per_sheet():
+    rows = [
+        ["SUBSTRUCTURE; (EXCAVATION TO DPC LEVEL)"],
+        ["MATERIAL ONLY"],
+        ["S/N", "MATERIALS", "QTY", "UNIT", "RATE", "AMOUNT"],
+        [1, "PEGS", 10, "pcs", 500, 5000],
+        ["TOTAL", None, None, None, None, 5000],
+        ["EXTERNAL PAINTING"],
+        ["MATERIAL ONLY"],
+        ["S/N", "MATERIALS", "QTY", "UNIT", "RATE", "AMOUNT"],
+        [1, "PAINT", 4, "buckets", 20000, 80000],
+    ]
+    content = _wb([("FLATS BGT 2", rows)])
+    wb = parse_budget_workbook(content)
+    items = wb.sheets[0].items
+    # Both sections' items are captured, each tagged with its OWN section.
+    assert [i.name for i in items] == ["PEGS", "PAINT"]
+    assert items[0].section == "SUBSTRUCTURE (EXCAVATION TO DPC LEVEL)"
+    assert items[1].section == "EXTERNAL PAINTING"

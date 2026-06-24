@@ -186,15 +186,19 @@ def parse_budget_workbook(content: bytes) -> ParsedWorkbook:
                     current_grp, current_category = a_grp_hit
                     continue
 
-            # Section header: a lone text cell (usually col A) and no table columns.
-            if a_text and not b_text and not seen_table:
-                # Only treat as section if it doesn't map to a group
-                sec_value, sec_matched = canonical_section(a_text)
-                current_section, section_matched = sec_value, sec_matched
+            # Totals / summary rows (checked before section so a "TOTAL" line in
+            # col A is never mistaken for a section header).
+            if "total" in _norm(b_text) or "total" in _norm(a_text):
                 continue
 
-            # Totals / summary rows.
-            if "total" in _norm(b_text) or "total" in _norm(a_text):
+            # Section header: a lone, non-numeric text cell in col A with empty
+            # col B. Tracked anywhere in the sheet — a single sheet holds several
+            # sections, each with its own table — so this must not be gated on
+            # whether a table has already appeared. Numeric-only col A (an S/N) is
+            # not a section.
+            if a_text and not b_text and not re.match(r"^\d+$", a_text):
+                sec_value, sec_matched = canonical_section(a_text)
+                current_section, section_matched = sec_value, sec_matched
                 continue
 
             # Item row: needs a name in col B and we are inside a table.
