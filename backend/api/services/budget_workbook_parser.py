@@ -40,3 +40,36 @@ def infer_budget_number(sheet_name: str) -> Tuple[Optional[int], bool]:
     if m:
         return (int(m.group(1)), True)
     return (None, False)
+
+
+GROUP_MAP = {
+    "material": ("General Materials", "Materials"),
+    "material_only": ("General Materials", "Materials"),
+    "materials": ("General Materials", "Materials"),
+    "general_materials": ("General Materials", "Materials"),
+    "woods": ("Woods", "Materials"),
+    "wood": ("Woods", "Materials"),
+    "irons": ("Irons", "Materials"),
+    "iron": ("Irons", "Materials"),
+    "plumbing": ("Plumbings", "Materials"),
+    "plumbings": ("Plumbings", "Materials"),
+    "electrical": ("Electrical", "Materials"),
+    "mechanical": ("Mechanical", "Materials"),
+    "labour": ("Labour", "Labour"),
+    "labour_only": ("Labour", "Labour"),
+    "labor": ("Labour", "Labour"),
+}
+
+_SECTION_CANON = {_norm(s): s for s in CONSTRUCTION_SECTIONS}
+
+
+def group_to_grp_category(text) -> Optional[Tuple[str, str]]:
+    return GROUP_MAP.get(_norm(text))
+
+
+def canonical_section(text) -> Tuple[str, bool]:
+    raw = str(text or "").strip()
+    hit = _SECTION_CANON.get(_norm(raw))
+    if hit:
+        return (hit, True)
+    return (raw, False)
