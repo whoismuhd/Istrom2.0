@@ -103,3 +103,12 @@
   font-size: 0.8rem;
   font-weight: 700;
 }
+
+.bulk-toggle { display: flex; align-items: center; gap: 8px; margin: 0.5rem 0 1rem; font-size: 0.9rem; }
+.bulk-sheet-block { margin-top: 1.25rem; }
+.bulk-sheet-title { display: flex; align-items: center; gap: 10px; margin-bottom: 0.4rem; }
+.bulk-chip { font-size: 0.72rem; padding: 2px 8px; border-radius: 6px; background: var(--cement-100); color: var(--text-muted); }
+.bulk-chip-warn { background: #fff1e0; color: #9a3412; }
+.bulk-row-excluded { opacity: 0.45; }
+.bulk-cell-warn { color: #9a3412; }
+.bulk-alert-warning { background: #fff7ed; color: #9a3412; }

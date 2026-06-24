@@ -1,214 +1,196 @@
 import { useMemo, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { api } from '../api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api, formatNaira } from '../api';
 import './BulkUpload.css';
 
-const AMOUNT_HEADER_RE = /(amount|unit[\s_]?cost|cost|price|total|value|rate)/i;
-const NUMBER_HEADER_RE = /(qty|quantity|count|number|no|s\/n|serial)/i;
-
-function parseNumeric(value) {
-  if (value == null) return null;
-  const text = String(value).trim();
-  if (!text) return null;
-  const normalized = text
-    .replace(/[₦$£€\s]/g, '')
-    .replace(/,/g, '')
-    .replace(/^\((.*)\)$/, '-$1');
-  if (!/^-?\d+(\.\d+)?$/.test(normalized)) return null;
-  const num = Number(normalized);
-  return Number.isFinite(num) ? num : null;
-}
-
-function formatNumericWithCommas(num) {
-  const hasDecimals = Math.abs(num % 1) > 0;
-  return num.toLocaleString('en-US', {
-    minimumFractionDigits: hasDecimals ? 2 : 0,
-    maximumFractionDigits: hasDecimals ? 2 : 0,
-  });
-}
-
-function getHeaderKind(header) {
-  const key = String(header || '').trim().toLowerCase();
-  if (AMOUNT_HEADER_RE.test(key)) return 'amount';
-  if (NUMBER_HEADER_RE.test(key)) return 'number';
-  return 'text';
-}
-
-function formatCellByHeader(header, value) {
-  const kind = getHeaderKind(header);
-  if (kind === 'text') return value ?? '';
-  const parsed = parseNumeric(value);
-  if (parsed == null) return value ?? '';
-  return formatNumericWithCommas(parsed);
-}
+const BUILDING_TYPES = ['Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
 
 export default function BulkUpload() {
+  const queryClient = useQueryClient();
+  const [step, setStep] = useState(1);
+  const [projectSite, setProjectSite] = useState('');
   const [file, setFile] = useState(null);
-  const [viewerData, setViewerData] = useState(null);
-  const [activeSheetIndex, setActiveSheetIndex] = useState(0);
+  const [analysis, setAnalysis] = useState(null);
+  const [skipExisting, setSkipExisting] = useState(true);
+  const [excluded, setExcluded] = useState(() => new Set());
   const [feedback, setFeedback] = useState({ type: '', message: '' });
 
-  const viewMutation = useMutation({
-    mutationFn: () => api.bulkUpload.view({ file }),
-    onSuccess: (data) => {
-      setViewerData(data);
-      setActiveSheetIndex(0);
-      setFeedback({
-        type: 'success',
-        message: 'File uploaded successfully. Preview is shown below and nothing was imported into inventory.',
-      });
-    },
-    onError: (err) => {
-      setViewerData(null);
-      setFeedback({
-        type: 'error',
-        message: err?.message || 'Unable to preview file. Please check format and try again.',
-      });
-    },
+  const { data: sites = [] } = useQuery({
+    queryKey: ['project-sites'],
+    queryFn: () => api.projectSites.list(),
   });
 
-  const activeSheet = useMemo(
-    () => viewerData?.sheets?.[activeSheetIndex] || null,
-    [viewerData, activeSheetIndex]
-  );
+  const analyzeMutation = useMutation({
+    mutationFn: () => api.bulkUpload.analyze({ file, projectSite }),
+    onSuccess: (data) => {
+      setAnalysis(data);
+      setExcluded(new Set());
+      setStep(2);
+      setFeedback({ type: '', message: '' });
+    },
+    onError: (err) =>
+      setFeedback({ type: 'error', message: err?.message || 'Could not read the file.' }),
+  });
 
-  const handleUpload = (e) => {
-    e.preventDefault();
-    if (!file) {
-      setFeedback({ type: 'warning', message: 'Choose a .xlsx or .csv file first.' });
-      return;
+  const commitMutation = useMutation({
+    mutationFn: (rows) =>
+      api.bulkUpload.commit({ projectSite, skipExisting, rows }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries(['items']);
+      setStep(3);
+      setFeedback({
+        type: 'success',
+        message: `Imported ${res.inserted_count} item(s). Skipped ${res.skipped.length}.`,
+      });
+    },
+    onError: (err) =>
+      setFeedback({ type: 'error', message: err?.message || 'Import failed.' }),
+  });
+
+  const rowKey = (it) => `${it.sheet_name}::${it.row_number}`;
+
+  const includedRows = useMemo(() => {
+    if (!analysis) return [];
+    const rows = [];
+    for (const sheet of analysis.sheets) {
+      for (const it of sheet.items) {
+        if (excluded.has(rowKey(it))) continue;
+        rows.push({
+          name: it.name, qty: it.qty, unit: it.unit, unit_cost: it.unit_cost,
+          category: it.category, budget: it.budget, section: it.section,
+          building_type: sheet.building_type, project_site: projectSite, grp: it.grp,
+        });
+      }
     }
-    setFeedback({ type: '', message: '' });
-    viewMutation.mutate();
+    return rows;
+  }, [analysis, excluded, projectSite]);
+
+  const toggleRow = (it) => {
+    const k = rowKey(it);
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      next.has(k) ? next.delete(k) : next.add(k);
+      return next;
+    });
+  };
+
+  const handleAnalyze = (e) => {
+    e.preventDefault();
+    if (!projectSite) return setFeedback({ type: 'warning', message: 'Select a project site first.' });
+    if (!file) return setFeedback({ type: 'warning', message: 'Choose a .xlsx file.' });
+    analyzeMutation.mutate();
   };
 
   return (
     <div className="bulk-upload-page">
       <div className="card">
-        <div className="bulk-upload-head">
-          <div>
-            <h2>Excel File Viewer</h2>
-            <p className="caption">
-              Upload an Excel or CSV file and view it in-app. This viewer does not write to inventory or update any records.
-            </p>
-          </div>
-        </div>
-
-        <form className="bulk-upload-form" onSubmit={handleUpload}>
-          <div className="form-row">
-            <div className="form-group form-group-wide">
-              <label>Upload File (.xlsx or .csv)</label>
-              <input
-                type="file"
-                accept=".xlsx,.csv"
-                onChange={(e) => {
-                  setFile(e.target.files?.[0] || null);
-                  setViewerData(null);
-                  setActiveSheetIndex(0);
-                  setFeedback({ type: '', message: '' });
-                }}
-                required
-              />
-            </div>
-          </div>
-
-          <div className="action-bar">
-            <button className="btn btn-primary" type="submit" disabled={viewMutation.isPending}>
-              {viewMutation.isPending ? 'Uploading...' : 'Upload & View'}
-            </button>
-            <button
-              className="btn btn-secondary"
-              type="button"
-              onClick={() => {
-                setFile(null);
-                setViewerData(null);
-                setActiveSheetIndex(0);
-                setFeedback({ type: '', message: '' });
-              }}
-            >
-              Clear
-            </button>
-          </div>
-        </form>
+        <h2>Import Budget Workbook</h2>
+        <p className="caption">Upload an Istrom budget .xlsx; review what it will create; then import.</p>
 
         {feedback.message && (
-          <div className={`alert bulk-alert ${feedback.type ? `bulk-alert-${feedback.type}` : ''}`}>
-            {feedback.message}
-          </div>
+          <div className={`alert bulk-alert bulk-alert-${feedback.type}`}>{feedback.message}</div>
+        )}
+
+        {step === 1 && (
+          <form className="bulk-upload-form" onSubmit={handleAnalyze}>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Project Site (required)</label>
+                <select value={projectSite} onChange={(e) => setProjectSite(e.target.value)} required>
+                  <option value="">Select project site…</option>
+                  {sites.map((s) => (
+                    <option key={s.id} value={s.name}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group form-group-wide">
+                <label>Budget Workbook (.xlsx)</label>
+                <input type="file" accept=".xlsx"
+                  onChange={(e) => { setFile(e.target.files?.[0] || null); setAnalysis(null); }} required />
+              </div>
+            </div>
+            <button className="btn btn-primary" type="submit" disabled={analyzeMutation.isPending}>
+              {analyzeMutation.isPending ? 'Reading…' : 'Read & Preview'}
+            </button>
+          </form>
         )}
       </div>
 
-      {viewerData && (
+      {step === 2 && analysis && (
         <div className="card">
           <div className="bulk-upload-head">
-            <div>
-              <h3>Preview: {viewerData.file_name}</h3>
-              <p className="caption">
-                Showing uploaded file only. No data has been imported into the system.
-              </p>
-            </div>
+            <h3>Preview: {analysis.file_name}</h3>
+            <p className="caption">
+              {analysis.item_count} item(s) across {analysis.sheet_count} sheet(s).
+              {analysis.duplicate_count > 0 && ` ${analysis.duplicate_count} already in inventory.`}
+            </p>
           </div>
 
-          {(viewerData.sheets?.length || 0) > 1 && (
-            <div className="bulk-sheet-tabs">
-              {viewerData.sheets.map((sheet, index) => (
-                <button
-                  key={`${sheet.sheet_name}-${index}`}
-                  className={index === activeSheetIndex ? 'active' : ''}
-                  onClick={() => setActiveSheetIndex(index)}
-                  type="button"
-                >
-                  {sheet.sheet_name}
-                </button>
-              ))}
-            </div>
-          )}
+          <label className="bulk-toggle">
+            <input type="checkbox" checked={skipExisting} onChange={(e) => setSkipExisting(e.target.checked)} />
+            Skip rows already in inventory ({analysis.duplicate_count})
+          </label>
 
-          {activeSheet && (
-            <>
-              <div className="bulk-sheet-meta">
-                <span><strong>Sheet:</strong> {activeSheet.sheet_name}</span>
-                <span><strong>Rows:</strong> {activeSheet.returned_rows} / {activeSheet.total_rows}</span>
-                {activeSheet.truncated && (
-                  <span className="bulk-sheet-truncated">Preview truncated for performance.</span>
-                )}
+          {analysis.sheets.map((sheet) => (
+            <div key={sheet.sheet_name} className="bulk-sheet-block">
+              <div className="bulk-sheet-title">
+                <strong>{sheet.sheet_name}</strong>
+                <span className={`bulk-chip ${sheet.building_type_confident ? '' : 'bulk-chip-warn'}`}>
+                  {sheet.building_type || 'building type?'}
+                </span>
+                <span className={`bulk-chip ${sheet.budget_confident ? '' : 'bulk-chip-warn'}`}>
+                  {sheet.budget_number ? `Budget ${sheet.budget_number}` : 'budget?'}
+                </span>
               </div>
-
               <div className="table-wrap">
-                <table className="data-table bulk-upload-table">
+                <table className="data-table">
                   <thead>
-                    <tr>
-                      <th className="bulk-col-sn">S/N</th>
-                      {activeSheet.headers.map((header, idx) => (
-                        <th key={`${header}-${idx}`}>{header}</th>
-                      ))}
-                    </tr>
+                    <tr><th></th><th>Item</th><th>Qty</th><th>Unit</th><th>Rate</th>
+                      <th>Category</th><th>Group</th><th>Section</th><th>Status</th></tr>
                   </thead>
                   <tbody>
-                    {activeSheet.rows.length === 0 ? (
-                      <tr className="table-empty-row">
-                        <td colSpan={Math.max(activeSheet.headers.length + 1, 1)}>No rows found in this sheet.</td>
-                      </tr>
-                    ) : (
-                      activeSheet.rows.map((row, rowIndex) => (
-                        <tr key={`row-${rowIndex}`}>
-                          <td className="bulk-col-sn">{formatNumericWithCommas(rowIndex + 1)}</td>
-                          {activeSheet.headers.map((header, cellIndex) => (
-                            <td
-                              key={`cell-${rowIndex}-${cellIndex}`}
-                              className={getHeaderKind(header) === 'text' ? '' : 'bulk-cell-number'}
-                            >
-                              {formatCellByHeader(header, row[cellIndex])}
-                            </td>
-                          ))}
+                    {sheet.items.map((it) => {
+                      const k = rowKey(it);
+                      const isExcluded = excluded.has(k);
+                      return (
+                        <tr key={k} className={isExcluded ? 'bulk-row-excluded' : ''}>
+                          <td><input type="checkbox" checked={!isExcluded} onChange={() => toggleRow(it)} /></td>
+                          <td>{it.name}</td>
+                          <td>{it.qty}</td>
+                          <td>{it.unit}</td>
+                          <td>{formatNaira(it.unit_cost)}</td>
+                          <td>{it.category || '—'}</td>
+                          <td>{it.grp || '—'}</td>
+                          <td className={it.section_matched ? '' : 'bulk-cell-warn'}>{it.section || '—'}</td>
+                          <td>{it.duplicate ? <span className="bulk-chip bulk-chip-warn">duplicate</span> : 'new'}</td>
                         </tr>
-                      ))
-                    )}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
-            </>
-          )}
+            </div>
+          ))}
+
+          <div className="action-bar">
+            <button className="btn btn-secondary" type="button" onClick={() => setStep(1)}>Back</button>
+            <button className="btn btn-primary" type="button"
+              disabled={commitMutation.isPending || includedRows.length === 0}
+              onClick={() => commitMutation.mutate(includedRows)}>
+              {commitMutation.isPending ? 'Importing…' : `Import ${includedRows.length} item(s)`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 3 && (
+        <div className="card">
+          <h3>Import complete</h3>
+          <p className="caption">{feedback.message}</p>
+          <button className="btn btn-primary" type="button"
+            onClick={() => { setStep(1); setFile(null); setAnalysis(null); }}>
+            Import another file
+          </button>
         </div>
       )}
     </div>
