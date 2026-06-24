@@ -94,10 +94,16 @@ export const api = {
       if (defaultProjectSite) form.append('default_project_site', defaultProjectSite);
       return request('/bulk-upload/preview', { method: 'POST', body: form });
     },
-    commit: (rows) =>
+    analyze: ({ file, projectSite }) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('project_site', projectSite);
+      return request('/bulk-upload/analyze', { method: 'POST', body: form });
+    },
+    commit: ({ projectSite, skipExisting, rows }) =>
       request('/bulk-upload/commit', {
         method: 'POST',
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ project_site: projectSite, skip_existing: skipExisting, rows }),
       }),
   },
 
