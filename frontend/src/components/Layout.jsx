@@ -104,8 +104,8 @@ const Icons = {
 
 const ADMIN_TABS = [
   { path: '/dashboard', label: 'Control Tower', icon: 'dashboard' },
-  // { path: '/bulk-upload', label: 'Excel Viewer', icon: 'upload' },
   { path: '/manual-entry', label: 'Manual Entry', icon: 'entry' },
+  { path: '/bulk-upload', label: 'Import Workbook', icon: 'upload' },
   { path: '/inventory', label: 'Inventory', icon: 'inventory' },
   { path: '/request', label: 'Make Request', icon: 'request' },
   { path: '/review', label: 'Review & History', icon: 'review' },
