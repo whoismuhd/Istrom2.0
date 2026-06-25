@@ -9,9 +9,48 @@ from api.services.budget_workbook_parser import (
     infer_building_type,
     infer_budget_number,
     group_to_grp_category,
+    infer_group_from_name,
     canonical_section,
     parse_budget_workbook,
 )
+
+
+def test_infer_group_from_item_name():
+    assert infer_group_from_name("Y16MM") == ("Irons", "Materials")
+    assert infer_group_from_name("B/WIRE(20kg)") == ("Irons", "Materials")
+    assert infer_group_from_name("MARINE BOARD") == ("Woods", "Materials")
+    assert infer_group_from_name("CEMENTS") == ("General Materials", "Materials")
+    assert infer_group_from_name('1/2" PVC PIPE') == ("Plumbings", "Materials")
+    assert infer_group_from_name("MASON (per day)") == ("Labour", "Labour")
+    assert infer_group_from_name("DUCT COVER") is None  # ambiguous -> not guessed
+
+
+def test_canonical_section_fuzzy_match():
+    value, matched = canonical_section("SUBSTRUCTURE; (GROUND UP TO DPC LEVEL)")
+    assert matched is True
+    assert value == "SUBSTRUCTURE (GROUND TO DPC LEVEL)"
+
+
+def test_canonical_section_fuzzy_rejects_far_text():
+    value, matched = canonical_section("COMPLETELY DIFFERENT RANDOM HEADING")
+    assert matched is False
+    assert value == "COMPLETELY DIFFERENT RANDOM HEADING"
+
+
+def test_group_inferred_when_no_header_in_sheet():
+    rows = [
+        ["SUBSTRUCTURE; (EXCAVATION TO DPC LEVEL)"],
+        ["S/N", "MATERIALS", "QTY", "UNIT", "RATE", "AMOUNT"],
+        [1, "Y16MM", 42, "length", 22000, 924000],
+        [2, "MARINE BOARD", 3, "sht", 47000, 141000],
+    ]
+    content = _wb([("FLATS BGT 1", rows)])
+    wb = parse_budget_workbook(content)
+    by_name = {i.name: i for i in wb.sheets[0].items}
+    assert by_name["Y16MM"].grp == "Irons"
+    assert by_name["Y16MM"].category == "Materials"
+    assert by_name["Y16MM"].budget == "Budget 1 - Flats(Irons)"
+    assert by_name["MARINE BOARD"].grp == "Woods"
 
 
 def test_building_type_inference():

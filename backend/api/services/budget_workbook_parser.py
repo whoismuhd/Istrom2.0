@@ -5,6 +5,7 @@ no writes.
 """
 from __future__ import annotations
 
+import difflib
 import io
 import re
 from dataclasses import dataclass, field
@@ -71,16 +72,58 @@ GROUP_MAP = {
 
 _SECTION_CANON = {_norm(s): s for s in CONSTRUCTION_SECTIONS}
 
+# Minimum SequenceMatcher ratio (on normalized text) to accept a fuzzy section
+# match. High on purpose: a wrong auto-match is worse than flagging for review.
+_SECTION_FUZZY_THRESHOLD = 0.86
+
+# Conservative item-name -> (group, category) inference, used only as a fallback
+# when a row has no group sub-header above it. Patterns are checked in order, so
+# more specific ones (e.g. binding wire -> Irons) come before generic ones
+# (e.g. wire -> Electrical). Ambiguous names match nothing and stay unset.
+_NAME_GROUP_PATTERNS = [
+    (re.compile(r"\bY\s?\d{1,2}\s?MM\b|\bBRC\b|BINDING\s*WIRE|\bB\s*/?\s*WIRE\b|REBAR|\bRODS?\b"),
+     ("Irons", "Materials")),
+    (re.compile(r"PLANK|PLYWOOD|MARINE\s*BOARD|TIMBER|\bWOODS?\b|\b2\s*X\s*[234]\b|\b1\s*X\s*12\b"),
+     ("Woods", "Materials")),
+    (re.compile(r"\bPIPES?\b|\bPVC\b|\bWC\b|CISTERN|PLUMB|SOAK\s*AWAY|\bGUTTER\b|\bELBOWS?\b|FITTINGS?"),
+     ("Plumbings", "Materials")),
+    (re.compile(r"\bCABLES?\b|CONDUIT|\bSWITCH(ES)?\b|\bSOCKETS?\b|\bELECTRIC|\bBULBS?\b|\bLAMPS?\b|\bWIRES?\b"),
+     ("Electrical", "Materials")),
+    (re.compile(r"CEMENT|\bSANDS?\b|GRANITES?|\bBLOCKS?\b|LATERITE|STONE\s*DUST|\bNAILS?\b|POLYST|\bDPM\b|GRAVEL"),
+     ("General Materials", "Materials")),
+    (re.compile(r"LABOUR|LABOR|\bMASONS?\b|CASTING|\bSETTING\b|FIXING|BENDER|WORKMAN"),
+     ("Labour", "Labour")),
+]
+
 
 def group_to_grp_category(text) -> Optional[Tuple[str, str]]:
     return GROUP_MAP.get(_norm(text))
 
 
+def infer_group_from_name(name) -> Optional[Tuple[str, str]]:
+    """Best-effort (group, category) from an item name. None when ambiguous."""
+    text = str(name or "").upper()
+    for pattern, value in _NAME_GROUP_PATTERNS:
+        if pattern.search(text):
+            return value
+    return None
+
+
 def canonical_section(text) -> Tuple[str, bool]:
     raw = str(text or "").strip()
-    hit = _SECTION_CANON.get(_norm(raw))
+    key = _norm(raw)
+    hit = _SECTION_CANON.get(key)
     if hit:
         return (hit, True)
+    # Fuzzy fallback: pick the closest canonical section above the threshold.
+    best_value = None
+    best_ratio = 0.0
+    for canon_key, canon_value in _SECTION_CANON.items():
+        ratio = difflib.SequenceMatcher(None, key, canon_key).ratio()
+        if ratio > best_ratio:
+            best_ratio, best_value = ratio, canon_value
+    if best_value and best_ratio >= _SECTION_FUZZY_THRESHOLD:
+        return (best_value, True)
     return (raw, False)
 
 
@@ -228,11 +271,16 @@ def parse_budget_workbook(content: bytes) -> ParsedWorkbook:
                 continue
 
             warnings: List[str] = []
-            if not current_grp:
-                warnings.append("No group header above this row; group is unset.")
-                grp, category = "", ""
-            else:
+            if current_grp:
                 grp, category = current_grp, current_category
+            else:
+                inferred = infer_group_from_name(b_text)
+                if inferred:
+                    grp, category = inferred
+                    warnings.append("Group inferred from item name; please verify.")
+                else:
+                    grp, category = "", ""
+                    warnings.append("No group header above this row; group is unset.")
             if not section_matched and current_section:
                 warnings.append("Section did not match a known section.")
 
