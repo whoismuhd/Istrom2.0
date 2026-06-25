@@ -94,6 +94,11 @@ export const api = {
       if (defaultProjectSite) form.append('default_project_site', defaultProjectSite);
       return request('/bulk-upload/preview', { method: 'POST', body: form });
     },
+    downloadTemplate: async () => {
+      const res = await fetch(`${API_BASE}/bulk-upload/template.xlsx`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Could not download the template');
+      return res.blob();
+    },
     analyze: ({ file, projectSite }) => {
       const form = new FormData();
       form.append('file', file);

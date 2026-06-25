@@ -6,7 +6,7 @@ import io
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
@@ -28,6 +28,7 @@ from api.schemas import (
     WorkbookItemPreview,
 )
 from api.services.budget_workbook_parser import parse_budget_workbook
+from api.services.import_template import build_import_template
 
 router = APIRouter(prefix="/bulk-upload", tags=["bulk-upload"])
 
@@ -581,6 +582,16 @@ def _existing_item_keys(db: Session, project_site: str) -> set:
             _clean_str(building_type).lower(),
         ))
     return keys
+
+
+@router.get("/template.xlsx")
+def download_import_template(user: dict = Depends(get_current_admin)):
+    """Download the standardized, dropdown-validated budget import template."""
+    return Response(
+        content=build_import_template(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="istrom-import-template.xlsx"'},
+    )
 
 
 @router.post("/analyze", response_model=WorkbookAnalyzeOut)

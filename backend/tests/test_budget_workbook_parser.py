@@ -158,6 +158,40 @@ def test_parse_extracts_items_with_mapping():
     assert mason.budget == "Budget 1 - Flats(Labour)"
 
 
+def test_parse_flat_template_groups_by_building_and_budget():
+    rows = [
+        ["Building Type", "Budget No", "Section", "Group", "Category", "Item Name", "Unit", "Qty", "Unit Cost"],
+        ["Flats", 1, "SUBSTRUCTURE (GROUND TO DPC LEVEL)", "Irons", "Materials", "Y16mm", "length", 42, 22000],
+        ["Flats", 1, "SUBSTRUCTURE (GROUND TO DPC LEVEL)", "General Materials", "Materials", "Cement", "bags", 800, 9400],
+        ["Terraces", 2, "SUBSTRUCTURE (GROUND TO DPC LEVEL)", "Labour", "Labour", "Mason", "day", 24, 15000],
+    ]
+    content = _wb([("Items", rows)])
+    wb = parse_budget_workbook(content)
+    assert len(wb.sheets) == 2  # (Flats, B1) and (Terraces, B2)
+    flats = next(s for s in wb.sheets if s.building_type == "Flats")
+    assert flats.budget_number == 1
+    assert flats.building_type_confident and flats.budget_confident
+    y16 = next(i for i in flats.items if i.name == "Y16mm")
+    assert y16.grp == "Irons"
+    assert y16.section_matched is True
+    assert y16.budget == "Budget 1 - Flats(Irons)"
+
+
+def test_import_template_roundtrips_through_parser():
+    from api.services.import_template import build_import_template
+    wb = parse_budget_workbook(build_import_template())
+    # The 3 seeded example rows -> (Flats, B1) x2 and (Terraces, B2) x1.
+    assert len(wb.sheets) == 2
+    flats = next(s for s in wb.sheets if s.building_type == "Flats")
+    cement = next(i for i in flats.items if i.name.startswith("Cement"))
+    assert cement.grp == "General Materials"
+    assert cement.category == "Materials"
+    assert cement.qty == 803
+    assert cement.unit_cost == 9400
+    assert cement.section_matched is True
+    assert cement.budget == "Budget 1 - Flats(General Materials)"
+
+
 def test_parse_skips_non_item_sheets():
     content = _wb([
         ("SUMMARY PAGE", [["whatever"]]),

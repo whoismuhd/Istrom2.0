@@ -130,6 +130,22 @@ export default function BulkUpload() {
     analyzeMutation.mutate();
   };
 
+  const handleDownloadTemplate = async () => {
+    try {
+      const blob = await api.bulkUpload.downloadTemplate();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'istrom-import-template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setFeedback({ type: 'error', message: err?.message || 'Could not download the template.' });
+    }
+  };
+
   return (
     <div className="bulk-upload-page">
       <div className="card">
@@ -158,9 +174,17 @@ export default function BulkUpload() {
                   onChange={(e) => { setFile(e.target.files?.[0] || null); setAnalysis(null); }} required />
               </div>
             </div>
-            <button className="btn btn-primary" type="submit" disabled={analyzeMutation.isPending}>
-              {analyzeMutation.isPending ? 'Reading…' : 'Read & Preview'}
-            </button>
+            <div className="action-bar">
+              <button className="btn btn-primary" type="submit" disabled={analyzeMutation.isPending}>
+                {analyzeMutation.isPending ? 'Reading…' : 'Read & Preview'}
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={handleDownloadTemplate}>
+                Download blank template
+              </button>
+            </div>
+            <p className="caption bulk-template-hint">
+              New budgets: fill the dropdown-validated template and they import with no corrections needed.
+            </p>
           </form>
         )}
       </div>

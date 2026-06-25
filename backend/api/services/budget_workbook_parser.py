@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 
 from openpyxl import load_workbook
 
-from constants import CONSTRUCTION_SECTIONS
+from constants import CONSTRUCTION_SECTIONS, PROPERTY_TYPES
 
 SKIP_SHEETS = {"summary page", "sheet1", "sheet2"}
 
@@ -196,12 +196,100 @@ def _budget_string(building_type, budget_number, grp) -> str:
     return f"Budget {budget_number} - {building_type}({grp})"
 
 
+# --- Flat standardized-template support -------------------------------------
+
+_VALID_BUILDING_TYPES = {b for b in PROPERTY_TYPES if b}
+
+_TEMPLATE_COLUMN_ALIASES = {
+    "building_type": "building_type", "building": "building_type", "buildingtype": "building_type",
+    "budget_no": "budget_no", "budget_number": "budget_no", "budget": "budget_no", "budgetno": "budget_no",
+    "section": "section",
+    "group": "grp", "grp": "grp",
+    "category": "category",
+    "item_name": "name", "itemname": "name", "item": "name", "name": "name",
+    "materials": "name", "description": "name", "descrition": "name",
+    "unit": "unit",
+    "qty": "qty", "quantity": "qty",
+    "unit_cost": "unit_cost", "unitcost": "unit_cost", "rate": "unit_cost", "price": "unit_cost",
+}
+
+
+def _flat_template_columns(header_row) -> Optional[dict]:
+    """Return {field: column_index} if header_row is a flat template, else None."""
+    mapping: dict = {}
+    for idx, cell in enumerate(header_row or []):
+        field = _TEMPLATE_COLUMN_ALIASES.get(_norm(cell))
+        if field and field not in mapping:
+            mapping[field] = idx
+    return mapping if {"building_type", "section", "grp", "name"} <= set(mapping) else None
+
+
+def _parse_flat_template(sheet_name: str, rows, cols: dict) -> List[ParsedSheet]:
+    """Parse a flat template sheet, grouping rows into virtual per-(building,budget) sheets."""
+    grouped: dict = {}
+    order: list = []
+
+    def _col(row, field):
+        idx = cols.get(field)
+        return _cell(row, idx) if idx is not None else None
+
+    for row_idx, raw in enumerate(rows[1:], start=2):
+        row = list(raw or [])
+        name = str(_col(row, "name") or "").strip()
+        if not name:
+            continue
+
+        building_type = str(_col(row, "building_type") or "").strip()
+        bt_conf = building_type in _VALID_BUILDING_TYPES
+        budget_number, bn_conf = infer_budget_number(f"Budget {_col(row, 'budget_no')}")
+        section, sec_matched = canonical_section(_col(row, "section"))
+        grp = str(_col(row, "grp") or "").strip()
+        category = str(_col(row, "category") or "").strip()
+
+        key = (building_type, budget_number)
+        if key not in grouped:
+            grouped[key] = ParsedSheet(
+                sheet_name=f"{building_type or '?'} — Budget {budget_number or '?'}",
+                building_type=building_type,
+                building_type_confident=bt_conf,
+                budget_number=budget_number,
+                budget_confident=bn_conf,
+            )
+            order.append(key)
+
+        grouped[key].items.append(ParsedItem(
+            name=name,
+            qty=_to_number(_col(row, "qty")),
+            unit=str(_col(row, "unit") or "").strip(),
+            unit_cost=_to_number(_col(row, "unit_cost")),
+            category=category,
+            grp=grp,
+            section=section,
+            section_matched=sec_matched,
+            budget=_budget_string(building_type, budget_number, grp),
+            sheet_name=sheet_name,
+            row_number=row_idx,
+        ))
+
+    return [grouped[k] for k in order if grouped[k].items]
+
+
 def parse_budget_workbook(content: bytes) -> ParsedWorkbook:
     wb = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     result = ParsedWorkbook()
 
     for ws in wb.worksheets:
         if _norm(ws.title) in {_norm(s) for s in SKIP_SHEETS}:
+            continue
+
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            continue
+
+        # Standardized flat template: every field is explicit per row.
+        template_cols = _flat_template_columns(rows[0])
+        if template_cols:
+            result.sheets.extend(_parse_flat_template(ws.title, rows, template_cols))
             continue
 
         building_type, bt_conf = infer_building_type(ws.title)
@@ -220,7 +308,7 @@ def parse_budget_workbook(content: bytes) -> ParsedWorkbook:
         current_category = ""
         seen_table = False
 
-        for row_idx, raw in enumerate(ws.iter_rows(values_only=True), start=1):
+        for row_idx, raw in enumerate(rows, start=1):
             row = list(raw or [])
             if all((c is None or str(c).strip() == "") for c in row):
                 continue
