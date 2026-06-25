@@ -47,7 +47,8 @@ export default function BulkUpload() {
             category: it.category || '',
             grp: it.grp || '',
             section: it.section || '',
-            excluded: false,
+            // Auto-exclude pure placeholder rows (no quantity and no rate).
+            excluded: it.qty === 0 && it.unit_cost === 0,
           };
         }
       }
@@ -81,6 +82,20 @@ export default function BulkUpload() {
     setRowEdits((prev) => ({ ...prev, [k]: { ...prev[k], [field]: value } }));
   const toggleRow = (k) =>
     setRowEdits((prev) => ({ ...prev, [k]: { ...prev[k], excluded: !prev[k]?.excluded } }));
+
+  // Bulk-apply a field (grp/section) to every row in one sheet.
+  const setSheetAllRows = (sheetName, field, value) => {
+    const sheet = analysis?.sheets.find((s) => s.sheet_name === sheetName);
+    if (!sheet || !value) return;
+    setRowEdits((prev) => {
+      const next = { ...prev };
+      for (const it of sheet.items) {
+        const k = rowKey(it);
+        next[k] = { ...next[k], [field]: value };
+      }
+      return next;
+    });
+  };
 
   // Build the commit payload from the edited working state.
   const includedRows = useMemo(() => {
@@ -190,6 +205,21 @@ export default function BulkUpload() {
                       onChange={(e) => setSheetField(sheet.sheet_name, 'budgetNumber', Number(e.target.value) || '')}>
                       <option value="">— set —</option>
                       {BUDGET_NUMBERS.map((n) => <option key={n} value={n}>Budget {n}</option>)}
+                    </select>
+                  </label>
+                  <span className="bulk-bulk-sep">apply to all rows:</span>
+                  <label className="bulk-inline-field">
+                    Group
+                    <select value="" onChange={(e) => setSheetAllRows(sheet.sheet_name, 'grp', e.target.value)}>
+                      <option value="">—</option>
+                      {groupOptions.map((g) => <option key={g} value={g}>{g}</option>)}
+                    </select>
+                  </label>
+                  <label className="bulk-inline-field">
+                    Section
+                    <select value="" onChange={(e) => setSheetAllRows(sheet.sheet_name, 'section', e.target.value)}>
+                      <option value="">—</option>
+                      {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
                   </label>
                 </div>

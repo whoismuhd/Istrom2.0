@@ -120,3 +120,4 @@
 .bulk-select-warn { border-color: var(--accent-orange) !important; background: #fff7ed; }
 .bulk-cell-budget { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; }
 .bulk-warn-note { margin-left: 12px; font-size: 0.82rem; color: #9a3412; }
+.bulk-bulk-sep { font-size: 0.74rem; color: var(--text-muted); margin-left: 6px; opacity: 0.8; }
