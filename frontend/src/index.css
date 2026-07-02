@@ -5,7 +5,7 @@
 }
 
 :root {
-  --header-h: 74px;
+  --header-h: 60px;
   --sidebar-w: 286px;
 
   --steel-950: #11151d;
@@ -22,9 +22,11 @@
   --panel-soft: #f8fafb;
   --text-strong: #1f2a36;
   --text-muted: #627185;
+  --line: #e3e7ec;
 
   --accent-amber: #f59e0b;
   --accent-orange: #ea580c;
+  --accent-orange-strong: #d24e08;
   --accent-safety: #ffb020;
   --accent-green: #1d9f6e;
   --accent-red: #db4f4f;
@@ -33,12 +35,12 @@
   --gradient-brand: linear-gradient(120deg, #f59e0b 0%, #ea580c 100%);
   --gradient-steel: linear-gradient(140deg, #141b26 0%, #243146 100%);
 
-  --radius-lg: 20px;
-  --radius-md: 14px;
-  --radius-sm: 10px;
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
 
-  --shadow-card: 0 20px 40px -30px rgba(17, 21, 29, 0.45);
-  --shadow-soft: 0 10px 24px -18px rgba(17, 21, 29, 0.35);
+  --shadow-card: 0 1px 2px rgba(17, 21, 29, 0.05);
+  --shadow-soft: 0 1px 2px rgba(17, 21, 29, 0.04);
 }
 
 html,
@@ -51,9 +53,6 @@ body {
   font-family: 'Manrope', 'Segoe UI', sans-serif;
   color: var(--text-strong);
   background-color: var(--cement-50);
-  background-image:
-    radial-gradient(circle at 92% 3%, rgba(245, 158, 11, 0.1) 0, transparent 26%),
-    radial-gradient(circle at 4% 90%, rgba(37, 99, 235, 0.08) 0, transparent 28%);
   line-height: 1.45;
 }
 

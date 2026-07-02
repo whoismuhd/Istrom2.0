@@ -44,8 +44,8 @@ export default function MakeRequest() {
   const createMutation = useMutation({
     mutationFn: (data) => api.requests.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['requests']);
-      queryClient.invalidateQueries(['notifications']);
+      queryClient.invalidateQueries({ queryKey: ['requests'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
       setItemId('');
       setQty(1);
       setCurrentPrice('');

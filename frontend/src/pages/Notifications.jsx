@@ -20,7 +20,7 @@ export default function Notifications() {
 
   const markReadMutation = useMutation({
     mutationFn: (id) => api.notifications.markRead(id),
-    onSuccess: () => queryClient.invalidateQueries(['notifications']),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
   const hasDetails = (n) => n.item_name || n.budget || n.building_subtype;
