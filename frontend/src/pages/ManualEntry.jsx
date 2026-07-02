@@ -32,7 +32,7 @@ export default function ManualEntry() {
   const createMutation = useMutation({
     mutationFn: (data) => api.items.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['items']);
+      queryClient.invalidateQueries({ queryKey: ['items'] });
       setName('');
       setQty('');
       setUnitCost('');

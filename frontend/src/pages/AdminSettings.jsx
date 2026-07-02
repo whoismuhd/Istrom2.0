@@ -96,7 +96,7 @@ export default function AdminSettings() {
   const updateAdminMutation = useMutation({
     mutationFn: (code) => api.accessCodes.update(code),
     onSuccess: () => {
-      queryClient.invalidateQueries(['accessCodes']);
+      queryClient.invalidateQueries({ queryKey: ['accessCodes'] });
       setNewAdminCode('');
     },
   });
@@ -104,7 +104,7 @@ export default function AdminSettings() {
   const createSiteMutation = useMutation({
     mutationFn: (data) => api.projectSites.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['projectSites']);
+      queryClient.invalidateQueries({ queryKey: ['projectSites'] });
       setNewSiteName('');
       setNewSitePasscode('');
       setNewSiteDescription('');
@@ -114,7 +114,7 @@ export default function AdminSettings() {
   const updateSiteMutation = useMutation({
     mutationFn: ({ id, data }) => api.projectSites.update(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['projectSites']);
+      queryClient.invalidateQueries({ queryKey: ['projectSites'] });
       setEditingSite(null);
       setEditSiteId(null);
     },
@@ -123,7 +123,7 @@ export default function AdminSettings() {
   const updateSiteCodeMutation = useMutation({
     mutationFn: ({ id, userCode }) => api.projectSites.updateAccessCode(id, userCode),
     onSuccess: () => {
-      queryClient.invalidateQueries(['projectSites']);
+      queryClient.invalidateQueries({ queryKey: ['projectSites'] });
       setEditSiteId(null);
       setSiteUserCode('');
     },
@@ -131,22 +131,22 @@ export default function AdminSettings() {
 
   const deleteSiteMutation = useMutation({
     mutationFn: (id) => api.projectSites.delete(id),
-    onSuccess: () => queryClient.invalidateQueries(['projectSites']),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projectSites'] }),
   });
 
   const clearLogsMutation = useMutation({
     mutationFn: () => api.accessLogs.clear(),
-    onSuccess: () => queryClient.invalidateQueries(['accessLogs']),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['accessLogs'] }),
   });
 
   const deleteNotifMutation = useMutation({
     mutationFn: (id) => api.notifications.delete(id),
-    onSuccess: () => queryClient.invalidateQueries(['notifications']),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
   const clearNotifsMutation = useMutation({
     mutationFn: () => api.notifications.clearAll(),
-    onSuccess: () => queryClient.invalidateQueries(['notifications']),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
   if (!isGlobalAdmin) return <div className="card"><p>Global admin access required.</p></div>;
@@ -382,7 +382,7 @@ export default function AdminSettings() {
               </select>
             </div>
           </div>
-          <button className="btn btn-secondary" onClick={() => queryClient.invalidateQueries(['accessLogs'])}>
+          <button className="btn btn-secondary" onClick={() => queryClient.invalidateQueries({ queryKey: ['accessLogs'] })}>
             Refresh
           </button>
           <button className="btn btn-danger" onClick={() => clearLogsMutation.mutate()}>

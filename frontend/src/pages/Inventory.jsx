@@ -52,7 +52,7 @@ export default function Inventory() {
     mutationFn: (id) => api.items.delete(id),
     onSuccess: () => {
       setDeleteError('');
-      queryClient.invalidateQueries(['items']);
+      queryClient.invalidateQueries({ queryKey: ['items'] });
     },
     onError: (error) => {
       setDeleteError(error.message || 'Could not delete item.');
@@ -62,7 +62,7 @@ export default function Inventory() {
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => api.items.update(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['items']);
+      queryClient.invalidateQueries({ queryKey: ['items'] });
       setEditItem(null);
     },
   });

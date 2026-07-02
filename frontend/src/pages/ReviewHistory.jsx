@@ -31,22 +31,22 @@ export default function ReviewHistory() {
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => api.requests.updateStatus(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['requests']);
-      queryClient.invalidateQueries(['notifications']);
+      queryClient.invalidateQueries({ queryKey: ['requests'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id) => api.requests.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries(['requests']);
-      queryClient.invalidateQueries(['deletedRequests']);
+      queryClient.invalidateQueries({ queryKey: ['requests'] });
+      queryClient.invalidateQueries({ queryKey: ['deletedRequests'] });
     },
   });
 
   const clearDeletedMutation = useMutation({
     mutationFn: () => api.deletedRequests.clear(),
-    onSuccess: () => queryClient.invalidateQueries(['deletedRequests']),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['deletedRequests'] }),
   });
 
   const handleApprove = (req) => {
