@@ -34,7 +34,7 @@
 .admin-metric-card {
   border-radius: 12px;
   border: 1px solid rgba(79, 92, 112, 0.2);
-  background: linear-gradient(180deg, #ffffff 0%, #eff4f9 100%);
+  background: #ffffff;
   box-shadow: var(--shadow-soft);
   padding: 0.8rem 0.9rem;
 }
@@ -70,7 +70,7 @@
 .admin-accordion-section {
   border-radius: 14px;
   border: 1px solid rgba(79, 92, 112, 0.2);
-  background: linear-gradient(180deg, #ffffff 0%, #f4f7fb 100%);
+  background: #ffffff;
   overflow: hidden;
   box-shadow: var(--shadow-card);
 }
@@ -81,7 +81,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.82rem 0.95rem;
-  background: linear-gradient(170deg, #ffffff 0%, #ebf1f7 100%);
+  background: #ffffff;
   border: none;
   font-size: 0.87rem;
   font-weight: 800;
@@ -93,7 +93,7 @@
 }
 
 .admin-accordion-header:hover {
-  background: linear-gradient(170deg, #ffffff 0%, #e4ebf3 100%);
+  background: #ffffff;
 }
 
 .admin-accordion-chevron {
@@ -112,7 +112,7 @@
 .admin-accordion-body {
   padding: 0.9rem;
   border-top: 1px solid rgba(79, 92, 112, 0.18);
-  background: linear-gradient(180deg, #f9fbfd 0%, #edf2f7 100%);
+  background: #fbfcfd;
 }
 
 .admin-accordion-body .form-row {
@@ -189,7 +189,7 @@
 
 .btn-update-admin {
   color: #fff8f8;
-  background: linear-gradient(120deg, #dc5151 0%, #be2f2f 100%);
+  background: #c53a3a;
   border: 1px solid transparent;
   border-radius: 11px;
   min-height: 42px;
@@ -230,7 +230,7 @@
   padding: 0.84rem 0.9rem;
   border-radius: 11px;
   border: 1px solid rgba(79, 92, 112, 0.2);
-  background: linear-gradient(180deg, #ffffff 0%, #f3f7fb 100%);
+  background: #ffffff;
   gap: 0.65rem;
   flex-wrap: wrap;
 }
@@ -275,10 +275,10 @@
 }
 
 .btn-add-project-site {
-  color: #111923;
-  background: var(--gradient-brand);
+  color: #ffffff;
+  background: var(--accent-orange);
   border: 1px solid transparent;
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   min-height: 42px;
   padding: 0.56rem 1.05rem;
   display: inline-flex;
@@ -336,7 +336,7 @@
   padding: 0.72rem 0.8rem;
   border-radius: 10px;
   border: 1px solid rgba(79, 92, 112, 0.2);
-  background: linear-gradient(180deg, #ffffff 0%, #f2f7fc 100%);
+  background: #ffffff;
 }
 
 .admin-notif-item.read {

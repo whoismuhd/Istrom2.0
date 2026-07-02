@@ -27,7 +27,7 @@
   padding: 0.78rem 0.88rem;
   border-radius: var(--radius-md);
   border: 1px solid rgba(79, 92, 112, 0.21);
-  background: linear-gradient(170deg, #ffffff 0%, #edf2f6 100%);
+  background: #ffffff;
 }
 
 .budget-available-title {
@@ -106,7 +106,7 @@
 .budget-kpi-card {
   border-radius: 12px;
   border: 1px solid rgba(79, 92, 112, 0.2);
-  background: linear-gradient(180deg, #ffffff 0%, #eff3f8 100%);
+  background: #ffffff;
   padding: 0.74rem 0.82rem;
   box-shadow: var(--shadow-soft);
 }
@@ -194,7 +194,7 @@
   align-items: center;
   gap: 0.48rem;
   padding: 0.82rem 0.96rem;
-  background: linear-gradient(180deg, #ffffff 0%, #f4f8fc 100%);
+  background: #ffffff;
   border: none;
   font-size: 0.9rem;
   font-weight: 700;
@@ -241,7 +241,7 @@
 .budget-accordion-body {
   padding: 0.88rem;
   border-top: 1px solid rgba(79, 92, 112, 0.2);
-  background: linear-gradient(180deg, #fbfdff 0%, #f1f5fa 100%);
+  background: #fbfcfd;
 }
 
 .budget-blocks-table {

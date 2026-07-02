@@ -21,7 +21,7 @@
   padding: 0.86rem 0.95rem;
   border-radius: 11px;
   border: 1px solid rgba(79, 92, 112, 0.21);
-  background: linear-gradient(180deg, #ffffff 0%, #f2f7fc 100%);
+  background: #ffffff;
   transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
