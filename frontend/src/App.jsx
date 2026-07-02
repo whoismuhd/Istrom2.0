@@ -5,7 +5,7 @@ import { useAuth } from './contexts/useAuth';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-// import BulkUpload from './pages/BulkUpload';
+import BulkUpload from './pages/BulkUpload';
 import ManualEntry from './pages/ManualEntry';
 import Inventory from './pages/Inventory';
 import MakeRequest from './pages/MakeRequest';
@@ -41,7 +41,7 @@ export default function App() {
             >
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
-              {/* <Route path="bulk-upload" element={<BulkUpload />} /> */}
+              <Route path="bulk-upload" element={<BulkUpload />} />
               <Route path="manual-entry" element={<ManualEntry />} />
               <Route path="inventory" element={<Inventory />} />
               <Route path="request" element={<MakeRequest />} />

@@ -94,10 +94,21 @@ export const api = {
       if (defaultProjectSite) form.append('default_project_site', defaultProjectSite);
       return request('/bulk-upload/preview', { method: 'POST', body: form });
     },
-    commit: (rows) =>
+    downloadTemplate: async () => {
+      const res = await fetch(`${API_BASE}/bulk-upload/template.xlsx`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Could not download the template');
+      return res.blob();
+    },
+    analyze: ({ file, projectSite }) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('project_site', projectSite);
+      return request('/bulk-upload/analyze', { method: 'POST', body: form });
+    },
+    commit: ({ projectSite, skipExisting, rows }) =>
       request('/bulk-upload/commit', {
         method: 'POST',
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ project_site: projectSite, skip_existing: skipExisting, rows }),
       }),
   },
 

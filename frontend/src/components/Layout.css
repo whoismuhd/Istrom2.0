@@ -5,26 +5,6 @@
   isolation: isolate;
 }
 
-.app-layout::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: -2;
-  opacity: 0.33;
-  background-image: linear-gradient(
-      135deg,
-      rgba(42, 58, 82, 0.08) 25%,
-      transparent 25%,
-      transparent 50%,
-      rgba(42, 58, 82, 0.08) 50%,
-      rgba(42, 58, 82, 0.08) 75%,
-      transparent 75%,
-      transparent
-    );
-  background-size: 26px 26px;
-}
-
 .app-layout::after {
   content: '';
   position: fixed;
@@ -569,16 +549,6 @@
   box-shadow: var(--shadow-card);
   overflow: hidden;
   animation: card-rise 0.42s ease both;
-}
-
-.card::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  background: var(--gradient-brand);
 }
 
 .card::after {

@@ -103,3 +103,21 @@
   font-size: 0.8rem;
   font-weight: 700;
 }
+
+.bulk-toggle { display: flex; align-items: center; gap: 8px; margin: 0.5rem 0 1rem; font-size: 0.9rem; }
+.bulk-sheet-block { margin-top: 1.25rem; }
+.bulk-sheet-title { display: flex; align-items: center; gap: 10px; margin-bottom: 0.4rem; }
+.bulk-chip { font-size: 0.72rem; padding: 2px 8px; border-radius: 6px; background: var(--cement-100); color: var(--text-muted); }
+.bulk-chip-warn { background: #fff1e0; color: #9a3412; }
+.bulk-row-excluded { opacity: 0.45; }
+.bulk-cell-warn { color: #9a3412; }
+.bulk-alert-warning { background: #fff7ed; color: #9a3412; }
+
+/* Editable review step */
+.bulk-inline-field { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text-muted); }
+.bulk-inline-field select { min-width: 120px; }
+.bulk-review-table select { min-width: 110px; padding: 4px 6px; font-size: 0.82rem; }
+.bulk-select-warn { border-color: var(--accent-orange) !important; background: #fff7ed; }
+.bulk-cell-budget { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; }
+.bulk-warn-note { margin-left: 12px; font-size: 0.82rem; color: #9a3412; }
+.bulk-bulk-sep { font-size: 0.74rem; color: var(--text-muted); margin-left: 6px; opacity: 0.8; }

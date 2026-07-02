@@ -1,214 +1,328 @@
 import { useMemo, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { api } from '../api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api, formatNaira } from '../api';
 import './BulkUpload.css';
 
-const AMOUNT_HEADER_RE = /(amount|unit[\s_]?cost|cost|price|total|value|rate)/i;
-const NUMBER_HEADER_RE = /(qty|quantity|count|number|no|s\/n|serial)/i;
+const BUILDING_TYPES = ['Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
+const BUDGET_NUMBERS = Array.from({ length: 20 }, (_, i) => i + 1);
 
-function parseNumeric(value) {
-  if (value == null) return null;
-  const text = String(value).trim();
-  if (!text) return null;
-  const normalized = text
-    .replace(/[₦$£€\s]/g, '')
-    .replace(/,/g, '')
-    .replace(/^\((.*)\)$/, '-$1');
-  if (!/^-?\d+(\.\d+)?$/.test(normalized)) return null;
-  const num = Number(normalized);
-  return Number.isFinite(num) ? num : null;
-}
-
-function formatNumericWithCommas(num) {
-  const hasDecimals = Math.abs(num % 1) > 0;
-  return num.toLocaleString('en-US', {
-    minimumFractionDigits: hasDecimals ? 2 : 0,
-    maximumFractionDigits: hasDecimals ? 2 : 0,
-  });
-}
-
-function getHeaderKind(header) {
-  const key = String(header || '').trim().toLowerCase();
-  if (AMOUNT_HEADER_RE.test(key)) return 'amount';
-  if (NUMBER_HEADER_RE.test(key)) return 'number';
-  return 'text';
-}
-
-function formatCellByHeader(header, value) {
-  const kind = getHeaderKind(header);
-  if (kind === 'text') return value ?? '';
-  const parsed = parseNumeric(value);
-  if (parsed == null) return value ?? '';
-  return formatNumericWithCommas(parsed);
-}
+const rowKey = (it) => `${it.sheet_name}::${it.row_number}`;
+const buildBudget = (bt, bn, grp) => (bt && bn && grp ? `Budget ${bn} - ${bt}(${grp})` : '');
 
 export default function BulkUpload() {
+  const queryClient = useQueryClient();
+  const [step, setStep] = useState(1);
+  const [projectSite, setProjectSite] = useState('');
   const [file, setFile] = useState(null);
-  const [viewerData, setViewerData] = useState(null);
-  const [activeSheetIndex, setActiveSheetIndex] = useState(0);
+  const [analysis, setAnalysis] = useState(null);
+  const [skipExisting, setSkipExisting] = useState(true);
+  // Editable working state, seeded from the analysis.
+  const [sheetMeta, setSheetMeta] = useState({}); // sheetName -> { buildingType, budgetNumber }
+  const [rowEdits, setRowEdits] = useState({});   // rowKey -> { category, grp, section, excluded }
   const [feedback, setFeedback] = useState({ type: '', message: '' });
 
-  const viewMutation = useMutation({
-    mutationFn: () => api.bulkUpload.view({ file }),
+  const { data: sites = [] } = useQuery({
+    queryKey: ['project-sites'],
+    queryFn: () => api.projectSites.list(),
+  });
+  const { data: constants = {} } = useQuery({
+    queryKey: ['constants'],
+    queryFn: () => api.constants.get(),
+  });
+  const sectionOptions = constants.CONSTRUCTION_SECTIONS || [];
+  const categoryOptions = constants.CATEGORY_OPTIONS || ['Materials', 'Labour', 'Material/Labour'];
+  const groupOptions =
+    constants.BUDGET_CATEGORIES ||
+    ['General Materials', 'Woods', 'Plumbings', 'Irons', 'Labour', 'Electrical', 'Mechanical'];
+
+  const analyzeMutation = useMutation({
+    mutationFn: () => api.bulkUpload.analyze({ file, projectSite }),
     onSuccess: (data) => {
-      setViewerData(data);
-      setActiveSheetIndex(0);
-      setFeedback({
-        type: 'success',
-        message: 'File uploaded successfully. Preview is shown below and nothing was imported into inventory.',
-      });
+      const meta = {};
+      const edits = {};
+      for (const s of data.sheets) {
+        meta[s.sheet_name] = { buildingType: s.building_type || '', budgetNumber: s.budget_number || '' };
+        for (const it of s.items) {
+          edits[rowKey(it)] = {
+            category: it.category || '',
+            grp: it.grp || '',
+            section: it.section || '',
+            // Auto-exclude pure placeholder rows (no quantity and no rate).
+            excluded: it.qty === 0 && it.unit_cost === 0,
+          };
+        }
+      }
+      setSheetMeta(meta);
+      setRowEdits(edits);
+      setAnalysis(data);
+      setStep(2);
+      setFeedback({ type: '', message: '' });
     },
-    onError: (err) => {
-      setViewerData(null);
-      setFeedback({
-        type: 'error',
-        message: err?.message || 'Unable to preview file. Please check format and try again.',
-      });
-    },
+    onError: (err) =>
+      setFeedback({ type: 'error', message: err?.message || 'Could not read the file.' }),
   });
 
-  const activeSheet = useMemo(
-    () => viewerData?.sheets?.[activeSheetIndex] || null,
-    [viewerData, activeSheetIndex]
+  const commitMutation = useMutation({
+    mutationFn: (rows) => api.bulkUpload.commit({ projectSite, skipExisting, rows }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['items'] });
+      setStep(3);
+      setFeedback({
+        type: 'success',
+        message: `Imported ${res.inserted_count} item(s). Skipped ${res.skipped.length}.`,
+      });
+    },
+    onError: (err) =>
+      setFeedback({ type: 'error', message: err?.message || 'Import failed.' }),
+  });
+
+  const setSheetField = (sheetName, field, value) =>
+    setSheetMeta((prev) => ({ ...prev, [sheetName]: { ...prev[sheetName], [field]: value } }));
+  const setRowField = (k, field, value) =>
+    setRowEdits((prev) => ({ ...prev, [k]: { ...prev[k], [field]: value } }));
+  const toggleRow = (k) =>
+    setRowEdits((prev) => ({ ...prev, [k]: { ...prev[k], excluded: !prev[k]?.excluded } }));
+
+  // Bulk-apply a field (grp/section) to every row in one sheet.
+  const setSheetAllRows = (sheetName, field, value) => {
+    const sheet = analysis?.sheets.find((s) => s.sheet_name === sheetName);
+    if (!sheet || !value) return;
+    setRowEdits((prev) => {
+      const next = { ...prev };
+      for (const it of sheet.items) {
+        const k = rowKey(it);
+        next[k] = { ...next[k], [field]: value };
+      }
+      return next;
+    });
+  };
+
+  // Build the commit payload from the edited working state.
+  const includedRows = useMemo(() => {
+    if (!analysis) return [];
+    const rows = [];
+    for (const s of analysis.sheets) {
+      const meta = sheetMeta[s.sheet_name] || {};
+      for (const it of s.items) {
+        const e = rowEdits[rowKey(it)] || {};
+        if (e.excluded) continue;
+        rows.push({
+          name: it.name, qty: it.qty, unit: it.unit, unit_cost: it.unit_cost,
+          category: e.category, grp: e.grp, section: e.section,
+          building_type: meta.buildingType,
+          budget: buildBudget(meta.buildingType, meta.budgetNumber, e.grp),
+          project_site: projectSite,
+        });
+      }
+    }
+    return rows;
+  }, [analysis, sheetMeta, rowEdits, projectSite]);
+
+  const incompleteCount = useMemo(
+    () => includedRows.filter((r) => !r.building_type || !r.grp).length,
+    [includedRows]
   );
 
-  const handleUpload = (e) => {
+  const handleAnalyze = (e) => {
     e.preventDefault();
-    if (!file) {
-      setFeedback({ type: 'warning', message: 'Choose a .xlsx or .csv file first.' });
-      return;
+    if (!projectSite) return setFeedback({ type: 'warning', message: 'Select a project site first.' });
+    if (!file) return setFeedback({ type: 'warning', message: 'Choose a .xlsx file.' });
+    analyzeMutation.mutate();
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const blob = await api.bulkUpload.downloadTemplate();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'istrom-import-template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setFeedback({ type: 'error', message: err?.message || 'Could not download the template.' });
     }
-    setFeedback({ type: '', message: '' });
-    viewMutation.mutate();
   };
 
   return (
     <div className="bulk-upload-page">
       <div className="card">
-        <div className="bulk-upload-head">
-          <div>
-            <h2>Excel File Viewer</h2>
-            <p className="caption">
-              Upload an Excel or CSV file and view it in-app. This viewer does not write to inventory or update any records.
-            </p>
-          </div>
-        </div>
-
-        <form className="bulk-upload-form" onSubmit={handleUpload}>
-          <div className="form-row">
-            <div className="form-group form-group-wide">
-              <label>Upload File (.xlsx or .csv)</label>
-              <input
-                type="file"
-                accept=".xlsx,.csv"
-                onChange={(e) => {
-                  setFile(e.target.files?.[0] || null);
-                  setViewerData(null);
-                  setActiveSheetIndex(0);
-                  setFeedback({ type: '', message: '' });
-                }}
-                required
-              />
-            </div>
-          </div>
-
-          <div className="action-bar">
-            <button className="btn btn-primary" type="submit" disabled={viewMutation.isPending}>
-              {viewMutation.isPending ? 'Uploading...' : 'Upload & View'}
-            </button>
-            <button
-              className="btn btn-secondary"
-              type="button"
-              onClick={() => {
-                setFile(null);
-                setViewerData(null);
-                setActiveSheetIndex(0);
-                setFeedback({ type: '', message: '' });
-              }}
-            >
-              Clear
-            </button>
-          </div>
-        </form>
+        <h2>Import Budget Workbook</h2>
+        <p className="caption">Upload an Istrom budget .xlsx; review and correct what it will create; then import.</p>
 
         {feedback.message && (
-          <div className={`alert bulk-alert ${feedback.type ? `bulk-alert-${feedback.type}` : ''}`}>
-            {feedback.message}
-          </div>
+          <div className={`alert bulk-alert bulk-alert-${feedback.type}`}>{feedback.message}</div>
+        )}
+
+        {step === 1 && (
+          <form className="bulk-upload-form" onSubmit={handleAnalyze}>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Project Site (required)</label>
+                <select value={projectSite} onChange={(e) => setProjectSite(e.target.value)} required>
+                  <option value="">Select project site…</option>
+                  {sites.map((s) => (
+                    <option key={s.id} value={s.name}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group form-group-wide">
+                <label>Budget Workbook (.xlsx)</label>
+                <input type="file" accept=".xlsx"
+                  onChange={(e) => { setFile(e.target.files?.[0] || null); setAnalysis(null); }} required />
+              </div>
+            </div>
+            <div className="action-bar">
+              <button className="btn btn-primary" type="submit" disabled={analyzeMutation.isPending}>
+                {analyzeMutation.isPending ? 'Reading…' : 'Read & Preview'}
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={handleDownloadTemplate}>
+                Download blank template
+              </button>
+            </div>
+            <p className="caption bulk-template-hint">
+              New budgets: fill the dropdown-validated template and they import with no corrections needed.
+            </p>
+          </form>
         )}
       </div>
 
-      {viewerData && (
+      {step === 2 && analysis && (
         <div className="card">
           <div className="bulk-upload-head">
-            <div>
-              <h3>Preview: {viewerData.file_name}</h3>
-              <p className="caption">
-                Showing uploaded file only. No data has been imported into the system.
-              </p>
-            </div>
+            <h3>Review: {analysis.file_name}</h3>
+            <p className="caption">
+              {analysis.item_count} item(s) across {analysis.sheet_count} sheet(s).
+              {analysis.duplicate_count > 0 && ` ${analysis.duplicate_count} already in inventory.`}
+              {' '}Correct any highlighted field before importing.
+            </p>
           </div>
 
-          {(viewerData.sheets?.length || 0) > 1 && (
-            <div className="bulk-sheet-tabs">
-              {viewerData.sheets.map((sheet, index) => (
-                <button
-                  key={`${sheet.sheet_name}-${index}`}
-                  className={index === activeSheetIndex ? 'active' : ''}
-                  onClick={() => setActiveSheetIndex(index)}
-                  type="button"
-                >
-                  {sheet.sheet_name}
-                </button>
-              ))}
-            </div>
-          )}
+          <label className="bulk-toggle">
+            <input type="checkbox" checked={skipExisting} onChange={(e) => setSkipExisting(e.target.checked)} />
+            Skip rows already in inventory ({analysis.duplicate_count})
+          </label>
 
-          {activeSheet && (
-            <>
-              <div className="bulk-sheet-meta">
-                <span><strong>Sheet:</strong> {activeSheet.sheet_name}</span>
-                <span><strong>Rows:</strong> {activeSheet.returned_rows} / {activeSheet.total_rows}</span>
-                {activeSheet.truncated && (
-                  <span className="bulk-sheet-truncated">Preview truncated for performance.</span>
-                )}
-              </div>
-
-              <div className="table-wrap">
-                <table className="data-table bulk-upload-table">
-                  <thead>
-                    <tr>
-                      <th className="bulk-col-sn">S/N</th>
-                      {activeSheet.headers.map((header, idx) => (
-                        <th key={`${header}-${idx}`}>{header}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activeSheet.rows.length === 0 ? (
-                      <tr className="table-empty-row">
-                        <td colSpan={Math.max(activeSheet.headers.length + 1, 1)}>No rows found in this sheet.</td>
-                      </tr>
-                    ) : (
-                      activeSheet.rows.map((row, rowIndex) => (
-                        <tr key={`row-${rowIndex}`}>
-                          <td className="bulk-col-sn">{formatNumericWithCommas(rowIndex + 1)}</td>
-                          {activeSheet.headers.map((header, cellIndex) => (
-                            <td
-                              key={`cell-${rowIndex}-${cellIndex}`}
-                              className={getHeaderKind(header) === 'text' ? '' : 'bulk-cell-number'}
-                            >
-                              {formatCellByHeader(header, row[cellIndex])}
+          {analysis.sheets.map((sheet) => {
+            const meta = sheetMeta[sheet.sheet_name] || {};
+            return (
+              <div key={sheet.sheet_name} className="bulk-sheet-block">
+                <div className="bulk-sheet-title">
+                  <strong>{sheet.sheet_name}</strong>
+                  <label className="bulk-inline-field">
+                    Building
+                    <select
+                      className={meta.buildingType ? '' : 'bulk-select-warn'}
+                      value={meta.buildingType}
+                      onChange={(e) => setSheetField(sheet.sheet_name, 'buildingType', e.target.value)}>
+                      <option value="">— set —</option>
+                      {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                  </label>
+                  <label className="bulk-inline-field">
+                    Budget
+                    <select
+                      className={meta.budgetNumber ? '' : 'bulk-select-warn'}
+                      value={meta.budgetNumber}
+                      onChange={(e) => setSheetField(sheet.sheet_name, 'budgetNumber', Number(e.target.value) || '')}>
+                      <option value="">— set —</option>
+                      {BUDGET_NUMBERS.map((n) => <option key={n} value={n}>Budget {n}</option>)}
+                    </select>
+                  </label>
+                  <span className="bulk-bulk-sep">apply to all rows:</span>
+                  <label className="bulk-inline-field">
+                    Group
+                    <select value="" onChange={(e) => setSheetAllRows(sheet.sheet_name, 'grp', e.target.value)}>
+                      <option value="">—</option>
+                      {groupOptions.map((g) => <option key={g} value={g}>{g}</option>)}
+                    </select>
+                  </label>
+                  <label className="bulk-inline-field">
+                    Section
+                    <select value="" onChange={(e) => setSheetAllRows(sheet.sheet_name, 'section', e.target.value)}>
+                      <option value="">—</option>
+                      {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="table-wrap">
+                  <table className="data-table bulk-review-table">
+                    <thead>
+                      <tr><th></th><th>Item</th><th>Qty</th><th>Unit</th><th>Rate</th>
+                        <th>Category</th><th>Group</th><th>Section</th><th>Budget</th><th>Status</th></tr>
+                    </thead>
+                    <tbody>
+                      {sheet.items.map((it) => {
+                        const k = rowKey(it);
+                        const e = rowEdits[k] || {};
+                        const budget = buildBudget(meta.buildingType, meta.budgetNumber, e.grp);
+                        return (
+                          <tr key={k} className={e.excluded ? 'bulk-row-excluded' : ''}>
+                            <td><input type="checkbox" checked={!e.excluded} onChange={() => toggleRow(k)} /></td>
+                            <td>{it.name}</td>
+                            <td>{it.qty}</td>
+                            <td>{it.unit}</td>
+                            <td>{formatNaira(it.unit_cost)}</td>
+                            <td>
+                              <select value={e.category} onChange={(ev) => setRowField(k, 'category', ev.target.value)}>
+                                {categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                              </select>
                             </td>
-                          ))}
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                            <td>
+                              <select className={e.grp ? '' : 'bulk-select-warn'}
+                                value={e.grp} onChange={(ev) => setRowField(k, 'grp', ev.target.value)}>
+                                <option value="">— set —</option>
+                                {groupOptions.map((g) => <option key={g} value={g}>{g}</option>)}
+                              </select>
+                            </td>
+                            <td>
+                              <select className={it.section_matched ? '' : 'bulk-select-warn'}
+                                value={e.section} onChange={(ev) => setRowField(k, 'section', ev.target.value)}>
+                                {!sectionOptions.includes(e.section) && e.section && (
+                                  <option value={e.section}>{e.section} (as-is)</option>
+                                )}
+                                <option value="">— none —</option>
+                                {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                              </select>
+                            </td>
+                            <td className={budget ? 'bulk-cell-budget' : 'bulk-cell-warn'}>{budget || 'incomplete'}</td>
+                            <td>{it.duplicate ? <span className="bulk-chip bulk-chip-warn">duplicate</span> : 'new'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </>
-          )}
+            );
+          })}
+
+          <div className="action-bar">
+            <button className="btn btn-secondary" type="button" onClick={() => setStep(1)}>Back</button>
+            <button className="btn btn-primary" type="button"
+              disabled={commitMutation.isPending || includedRows.length === 0}
+              onClick={() => commitMutation.mutate(includedRows)}>
+              {commitMutation.isPending ? 'Importing…' : `Import ${includedRows.length} item(s)`}
+            </button>
+            {incompleteCount > 0 && (
+              <span className="bulk-warn-note">
+                {incompleteCount} item(s) missing building type or group — they will import with an empty budget.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {step === 3 && (
+        <div className="card">
+          <h3>Import complete</h3>
+          <p className="caption">{feedback.message}</p>
+          <button className="btn btn-primary" type="button"
+            onClick={() => { setStep(1); setFile(null); setAnalysis(null); }}>
+            Import another file
+          </button>
         </div>
       )}
     </div>
