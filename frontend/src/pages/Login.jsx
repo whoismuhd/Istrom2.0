@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/useAuth';
 import Logo from '../components/Logo';
 import './Login.css';
@@ -9,8 +9,11 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
+  const { login, user } = useAuth();
   const navigate = useNavigate();
+
+  // Already signed in: go straight to the app instead of showing the form.
+  if (user) return <Navigate to="/" replace />;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
