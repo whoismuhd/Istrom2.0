@@ -9,6 +9,7 @@ from models import Request, Item, Notification, Actual, DeletedRequest
 from api.schemas import RequestCreate, RequestStatusUpdate, RequestOut
 from api.dependencies import get_current_user, get_current_admin, enforce_project_site_scope
 from api.services.notification_hub import notification_hub
+from api.services.push_service import send_push_for_notification
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 ALLOWED_REQUEST_STATUSES = {"Pending", "Approved", "Rejected"}
@@ -20,6 +21,16 @@ def _queue_notification_created_event(background_tasks: BackgroundTasks, notif: 
         notif.id,
         notif.notification_type,
         notif.project_site,
+    )
+    # Second delivery channel: Web Push to subscribed devices (no-op unless
+    # VAPID keys are configured). Same visibility rules as the hub.
+    background_tasks.add_task(
+        send_push_for_notification,
+        notif.id,
+        notif.notification_type,
+        notif.project_site,
+        notif.title,
+        notif.message,
     )
 
 

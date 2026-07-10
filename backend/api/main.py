@@ -10,6 +10,7 @@ from api.routes import auth, items, requests, notifications, actuals, project_si
 from api.routes import access_codes, access_logs, constants, deleted_requests
 from api.routes import bulk_upload
 from api.routes import realtime
+from api.routes import push
 
 _DEV_ORIGINS = [
     "http://localhost:5173", "http://localhost:5174", "http://localhost:5175",
@@ -54,6 +55,7 @@ app.include_router(constants.router)
 app.include_router(deleted_requests.router)
 app.include_router(bulk_upload.router)
 app.include_router(realtime.router)
+app.include_router(push.router)
 
 
 @app.on_event("startup")

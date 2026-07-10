@@ -100,6 +100,20 @@ class Notification(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+    id = Column(Integer, primary_key=True, index=True)
+    endpoint = Column(Text, nullable=False, unique=True)
+    p256dh = Column(String(255), nullable=False)
+    auth = Column(String(255), nullable=False)
+    # Role snapshot from the subscriber's token, used to target pushes with the
+    # same visibility rules as in-app notifications.
+    user_type = Column(String(50), nullable=True)
+    project_site = Column(String(255), nullable=True)
+    is_global_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class AccessLog(Base):
     __tablename__ = "access_logs"
     id = Column(Integer, primary_key=True, index=True)

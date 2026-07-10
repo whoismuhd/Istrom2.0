@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, formatDate } from '../api';
+import { pushSupported, getPushSubscription, enablePush, disablePush } from '../push';
 import './Notifications.css';
 
 function getBadgeClass(type) {
@@ -12,6 +14,38 @@ function getBadgeClass(type) {
 
 export default function Notifications() {
   const queryClient = useQueryClient();
+  const [pushOn, setPushOn] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMsg, setPushMsg] = useState('');
+
+  useEffect(() => {
+    if (!pushSupported()) return;
+    getPushSubscription().then((sub) => setPushOn(!!sub)).catch(() => {});
+  }, []);
+
+  const togglePush = async () => {
+    setPushBusy(true);
+    setPushMsg('');
+    try {
+      if (pushOn) {
+        await disablePush();
+        setPushOn(false);
+        setPushMsg('Device notifications turned off.');
+      } else {
+        const res = await enablePush();
+        if (res.ok) {
+          setPushOn(true);
+          setPushMsg('This device will now get notifications even when the app is closed.');
+        } else {
+          setPushMsg(res.reason || 'Could not enable notifications.');
+        }
+      }
+    } catch (err) {
+      setPushMsg(err?.message || 'Could not update notification settings.');
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications'],
@@ -30,6 +64,17 @@ export default function Notifications() {
       <div className="card">
         <h2>Your Notifications</h2>
         <p className="caption">View approvals, rejections, and submissions</p>
+
+        {pushSupported() && (
+          <div className="push-toggle-row">
+            <button className="btn btn-secondary btn-sm" onClick={togglePush} disabled={pushBusy}>
+              {pushBusy ? 'Working…' : pushOn ? 'Disable device notifications' : 'Enable device notifications'}
+            </button>
+            <span className="push-toggle-hint">
+              {pushMsg || 'Get a phone/desktop notification for new activity even when the app is closed.'}
+            </span>
+          </div>
+        )}
 
         {notifications.length === 0 && (
           <p className="notifications-empty">No notifications yet.</p>
