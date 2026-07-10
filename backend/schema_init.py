@@ -65,6 +65,7 @@ def seed_default_data():
                 project_site="Lifecamp Kafe",
                 admin_code=hash_access_code(DEFAULT_ADMIN_CODE),
                 user_code=hash_access_code(DEFAULT_USER_CODE),
+                user_code_plain=DEFAULT_USER_CODE,
             )
             db.add(pac)
             db.commit()
@@ -98,6 +99,7 @@ def run_migrations():
         ("ALTER TABLE notifications ADD COLUMN qty REAL", "notif_qty"),
         ("ALTER TABLE notifications ADD COLUMN budget VARCHAR(255)", "notif_budget"),
         ("ALTER TABLE notifications ADD COLUMN building_subtype VARCHAR(100)", "notif_building_subtype"),
+        ("ALTER TABLE project_site_access_codes ADD COLUMN user_code_plain VARCHAR(255)", "pac_user_code_plain"),
     ]
     for sql, _ in migrations:
         try:

@@ -20,6 +20,9 @@ class ProjectSiteAccessCode(Base):
     project_site = Column(String(255), nullable=False, unique=True)
     admin_code = Column(String(255), nullable=False)
     user_code = Column(String(255), nullable=False)
+    # Retrievable copy for admin display; the bcrypt user_code above remains the
+    # verification source of truth. Null for codes set before this column existed.
+    user_code_plain = Column(String(255), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
