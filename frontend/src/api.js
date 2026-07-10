@@ -130,6 +130,7 @@ export const api = {
     update: (id, data) =>
       request(`/project-sites/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id) => request(`/project-sites/${id}`, { method: 'DELETE' }),
+    getAccessCode: (id) => request(`/project-sites/${id}/access-code`),
     updateAccessCode: (id, userCode) =>
       request(`/project-sites/${id}/access-code`, {
         method: 'PATCH',

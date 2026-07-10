@@ -48,6 +48,7 @@ def create_project_site(
         project_site=data.name,
         admin_code="",  # Admin uses global
         user_code=hash_access_code(user_code),
+        user_code_plain=user_code,
     )
     db.add(pac)
     db.commit()
@@ -118,12 +119,39 @@ def update_site_access_code(
         raise HTTPException(422, "User access code cannot be empty")
     if pac:
         pac.user_code = hash_access_code(code)
+        pac.user_code_plain = code
     else:
         pac = ProjectSiteAccessCode(
             project_site=ps.name,
             admin_code="",
             user_code=hash_access_code(code),
+            user_code_plain=code,
         )
         db.add(pac)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/{site_id}/access-code")
+def reveal_site_access_code(
+    site_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_global_admin),
+):
+    """Return the current user access code for a site (global admin only).
+
+    user_code is null for codes set before retrievable storage existed —
+    the bcrypt hash cannot be reversed, so those must be reset to be viewable.
+    """
+    ps = db.query(ProjectSite).filter(ProjectSite.id == site_id).first()
+    if not ps:
+        raise HTTPException(404, "Project site not found")
+    pac = db.query(ProjectSiteAccessCode).filter(
+        ProjectSiteAccessCode.project_site == ps.name
+    ).first()
+    configured = bool(pac and pac.user_code)
+    return {
+        "project_site": ps.name,
+        "configured": configured,
+        "user_code": pac.user_code_plain if (pac and pac.user_code_plain) else None,
+    }

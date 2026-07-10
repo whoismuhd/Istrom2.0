@@ -51,6 +51,25 @@ export default function AdminSettings() {
   const [showNewAdminCode, setShowNewAdminCode] = useState(false);
   const [showNewSitePasscode, setShowNewSitePasscode] = useState(false);
   const [showEditSiteCode, setShowEditSiteCode] = useState(false);
+  // site id -> revealed code info ({ user_code }) fetched on demand
+  const [revealedCodes, setRevealedCodes] = useState({});
+
+  const toggleRevealCode = async (siteId) => {
+    if (revealedCodes[siteId]) {
+      setRevealedCodes((prev) => {
+        const next = { ...prev };
+        delete next[siteId];
+        return next;
+      });
+      return;
+    }
+    try {
+      const info = await api.projectSites.getAccessCode(siteId);
+      setRevealedCodes((prev) => ({ ...prev, [siteId]: info }));
+    } catch {
+      setRevealedCodes((prev) => ({ ...prev, [siteId]: { error: true } }));
+    }
+  };
 
   const { data: accessCodes = {} } = useQuery({
     queryKey: ['accessCodes'],
@@ -213,7 +232,31 @@ export default function AdminSettings() {
                 <div key={s.id} className="project-site-card">
                   <div className="project-site-info">
                     <div className="project-site-title">{index + 1}. {s.name} Project</div>
-                  <div className="project-site-access-code">User Access Code: {s.user_code || 'Not Configured'}</div>
+                  <div className="project-site-access-code">
+                    User Access Code:{' '}
+                    {revealedCodes[s.id] ? (
+                      revealedCodes[s.id].error ? (
+                        <span className="site-code-hint">could not load code</span>
+                      ) : revealedCodes[s.id].user_code ? (
+                        <code className="site-code-value">{revealedCodes[s.id].user_code}</code>
+                      ) : (
+                        <span className="site-code-hint">
+                          not viewable — set a new code (older codes are stored irreversibly)
+                        </span>
+                      )
+                    ) : (
+                      <span>{s.user_code || 'Not Configured'}</span>
+                    )}
+                    {(s.user_code || revealedCodes[s.id]) && (
+                      <button
+                        type="button"
+                        className="btn-link site-code-toggle"
+                        onClick={() => toggleRevealCode(s.id)}
+                      >
+                        {revealedCodes[s.id] ? 'Hide' : 'Show code'}
+                      </button>
+                    )}
+                  </div>
                   </div>
                 <div className="project-site-actions">
                   <button className="btn btn-secondary btn-sm" onClick={() => { setEditingSite(s); setEditSiteName(s.name); }}>

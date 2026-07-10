@@ -437,3 +437,34 @@
     justify-content: space-between;
   }
 }
+
+.site-code-value {
+  font-family: 'SF Mono', ui-monospace, Menlo, monospace;
+  font-size: 0.85rem;
+  background: var(--cement-100);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  color: var(--text-strong);
+}
+
+.site-code-hint {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.82rem;
+}
+
+.btn-link.site-code-toggle {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-left: 8px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.btn-link.site-code-toggle:hover {
+  text-decoration: underline;
+}
