@@ -111,6 +111,7 @@ const ADMIN_TABS = [
   { path: '/review', label: 'Review & History', icon: 'review' },
   { path: '/budget-summary', label: 'Budget Summary', icon: 'budget' },
   { path: '/actuals', label: 'Actuals', icon: 'actuals' },
+  { path: '/notifications', label: 'Notifications', icon: 'bell' },
   { path: '/settings', label: 'Admin Settings', icon: 'settings' },
 ];
 
@@ -204,7 +205,7 @@ export default function Layout() {
         )}
 
         <div className="header-actions">
-          {!isGlobalAdmin && unreadCount > 0 && (
+          {unreadCount > 0 && (
             <button
               className="notif-icon-btn"
               onClick={() => navigate('/notifications')}
