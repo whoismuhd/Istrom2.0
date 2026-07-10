@@ -46,6 +46,14 @@ export const api = {
       }),
   },
 
+  push: {
+    vapidPublicKey: () => request('/push/vapid-public-key'),
+    subscribe: (subscription) =>
+      request('/push/subscribe', { method: 'POST', body: JSON.stringify(subscription) }),
+    unsubscribe: (endpoint) =>
+      request('/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint }) }),
+  },
+
   items: {
     list: (params = {}) => {
       const clean = Object.fromEntries(
