@@ -14,11 +14,11 @@ test('Wrong personal login displays the server error without redirecting', async
 
 test('Expired or revoked session clears credentials and returns to login', async () => {
   const removed = [];
-  globalThis.sessionStorage = { getItem: () => 'expired-token', removeItem: (key) => removed.push(key) };
+  globalThis.sessionStorage = { getItem: (key) => key === 'istrom_token' ? 'expired-token' : null, removeItem: (key) => removed.push(key) };
   globalThis.window = { location: { href: '/inventory' } };
   globalThis.fetch = async () => ({ status: 401, ok: false, json: async () => ({ detail: 'Invalid or expired token' }) });
   await assert.rejects(api.items.list(), { message: 'Session expired' });
-  assert.deepEqual(removed, ['istrom_token', 'istrom_user']);
+  assert.deepEqual(removed, ['istrom_import_draft', 'istrom_token', 'istrom_user']);
   assert.equal(window.location.href, '/login');
 });
 

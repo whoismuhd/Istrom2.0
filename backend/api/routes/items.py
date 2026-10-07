@@ -1,5 +1,7 @@
 """Items routes."""
 from typing import Optional, List
+from decimal import Decimal
+from datetime import timezone
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import exists
@@ -12,8 +14,13 @@ from api.dependencies import get_current_user, get_current_admin, enforce_projec
 from api.services.notification_hub import notification_hub
 from api.services.inventory_records import finite_cost_total, lock_linked_item
 from api.services.project_records import lock_project_records
+from api.services.creation_receipts import claim_creation, retire_creation_receipts
 
 router = APIRouter(prefix="/items", tags=["items"])
+
+
+def _utc_creation_time(value):
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
 
 
 def _filter_items(db: Session, project_site: Optional[str], budget: Optional[str],
@@ -63,6 +70,12 @@ def create_item(
     requested_site = data.project_site or user.get("project_site")
     project_site = require_active_project_site(db, user, requested_site, lock=True)
     finite_cost_total(data.qty, data.unit_cost)
+    payload = data.model_dump(exclude={'submission_key'})
+    payload['project_site'] = project_site
+    receipt, existing = claim_creation(db, user, 'item', data.submission_key, payload, Item)
+    if existing is not None:
+        enforce_record_scope(user, existing.project_site)
+        return existing
     item = Item(
         name=data.name,
         category=data.category,
@@ -80,6 +93,8 @@ def create_item(
     db.add(item)
     db.flush()
     item.code = f"IT-{item.id}"
+    if receipt is not None:
+        receipt.record_id = item.id
     db.commit()
     db.refresh(item)
     background_tasks.add_task(notification_hub.broadcast_workspace_changed, item.project_site)
@@ -99,33 +114,38 @@ def update_item(
         raise HTTPException(404, "Item not found")
     lock_project_records(db, item.project_site, item)
     enforce_record_scope(user, item.project_site)
+    lock_linked_item(db, item)
+    if 'expected_created_at' in data.model_fields_set:
+        if (data.expected_created_at is None or item.created_at is None
+                or _utc_creation_time(data.expected_created_at) != _utc_creation_time(item.created_at)):
+            db.rollback()
+            raise HTTPException(409, 'This inventory item was replaced or its identity could not be verified. Refresh and choose the item again.')
+    expected_fields = {
+        'expected_qty': 'qty',
+        'expected_unit_cost': 'unit_cost',
+        'expected_planned_qty': 'planned_qty',
+        'expected_planned_unit_cost': 'planned_unit_cost',
+    }
+    for expected_field, stored_field in expected_fields.items():
+        expected = getattr(data, expected_field)
+        if expected is not None and Decimal(str(getattr(item, stored_field))) != Decimal(str(expected)):
+            db.rollback()
+            detail = ('The original budget changed while you were editing. Refresh Inventory and review the current values.'
+                      if stored_field.startswith('planned_')
+                      else 'Availability or unit cost changed while you were editing. Refresh Actuals and review the current values.')
+            raise HTTPException(409, detail)
     finite_cost_total(data.qty if data.qty is not None else item.qty,
                       data.unit_cost if data.unit_cost is not None else item.unit_cost)
     finite_cost_total(data.planned_qty if data.planned_qty is not None else item.planned_qty,
                       data.planned_unit_cost if data.planned_unit_cost is not None else item.planned_unit_cost,
                       'Budget total')
-    if data.expected_qty is not None:
-        changes = data.model_dump(exclude_none=True, exclude={"expected_qty"})
-        if changes:
-            updated = db.query(Item).filter(Item.id == item.id, Item.qty == data.expected_qty).update(changes, synchronize_session="fetch")
-            if not updated:
-                db.rollback()
-                raise HTTPException(409, "Availability changed while you were editing. Refresh Actuals and try again.")
-            db.commit()
-            db.refresh(item)
-            background_tasks.add_task(notification_hub.broadcast_workspace_changed, item.project_site)
-        return item
-    if data.qty is not None:
-        item.qty = data.qty
-    if data.unit_cost is not None:
-        item.unit_cost = data.unit_cost
-    if data.planned_qty is not None:
-        item.planned_qty = data.planned_qty
-    if data.planned_unit_cost is not None:
-        item.planned_unit_cost = data.planned_unit_cost
-    db.commit()
-    db.refresh(item)
-    background_tasks.add_task(notification_hub.broadcast_workspace_changed, item.project_site)
+    changes = data.model_dump(exclude_none=True, exclude={*expected_fields, 'expected_created_at'})
+    if changes:
+        for field, value in changes.items():
+            setattr(item, field, value)
+        db.commit()
+        db.refresh(item)
+        background_tasks.add_task(notification_hub.broadcast_workspace_changed, item.project_site)
     return item
 
 
@@ -157,6 +177,7 @@ def delete_item(
             ~exists().where(Actual.item_id == item_id),
         ).delete(synchronize_session=False)
         if removed:
+            retire_creation_receipts(db, 'item', item_id)
             db.commit()
     except IntegrityError as exc:
         db.rollback()

@@ -1,11 +1,10 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import ErrorMessage from '../components/ErrorMessage';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import { formatQuantity, summarizeActuals } from '../utils/inventory.js';
 import LoadError from '../components/LoadError';
 import { matchesBudget, plannedQuantity, plannedUnitCost, plannedAmount, plannedTotal, budgetPosition, toCSV, budgetNumberOptions } from '../utils/budgets';
-import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatNaira } from '../api';
@@ -13,6 +12,8 @@ import './Actuals.css';
 import { actualBuildingSubtypes } from '../utils/buildings';
 import { decimalDifference, sumDecimals } from '../utils/numbers';
 import { downloadBlob } from '../utils/downloads';
+import usePersistentState from '../hooks/usePersistentState';
+import { ACTUALS_VIEW, AVAILABILITY_DRAFT, isActualsView, isAvailabilityDraft, availabilityDraftFor, resolveRecordDraft, reviewedRecordFor, isReviewCurrent } from '../utils/recordDrafts';
 
 const PROPERTY_TYPES = ['', 'All', 'Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
 
@@ -24,34 +25,44 @@ const BUILDING_SUBTYPE_LABELS = {
 };
 
 export default function Actuals() {
-  const { isAdmin, getEffectiveProjectSite } = useAuth();
+  const { user, isAdmin, getEffectiveProjectSite } = useAuth();
   const queryClient = useQueryClient();
-  const [adjustItem, setAdjustItem] = useState(null);
-  const [adjustQty, setAdjustQty] = useState('');
-  const [adjustOver, setAdjustOver] = useState(false);
-  const [adjustCost, setAdjustCost] = useState('');
-  const closeAdjustment = useCallback(() => setAdjustItem(null), []);
+  const ps = getEffectiveProjectSite();
+  const actionScope = JSON.stringify([user?.user_id, user?.username, user?.user_type, user?.project_site, user?.is_global_admin, ps]);
+  const [review, setReview] = useState({ scope: actionScope, values: null });
+  if (review.scope !== actionScope) setReview({ scope: actionScope, values: null });
+  const [storedAdjustDraft, setAdjustDraft, clearAdjustDraft, draftStorageError] = usePersistentState('actuals-adjustment', AVAILABILITY_DRAFT, { validate: isAvailabilityDraft });
+  const adjustDraft = storedAdjustDraft.itemId > 0 ? storedAdjustDraft : null;
+  const adjustQty = adjustDraft?.qty ?? '';
+  const adjustOver = adjustDraft?.over ?? false;
+  const adjustCost = adjustDraft?.cost ?? '';
+  const updateAdjustment = (values) => setAdjustDraft((current) => current ? { ...current, ...values } : current);
+  const closeAdjustment = useCallback(() => {
+    clearAdjustDraft();
+    setReview((current) => current.scope === actionScope ? { ...current, values: null } : current);
+  }, [clearAdjustDraft, actionScope]);
   const adjustment = useMutation({
     mutationFn: ({ id, data }) => api.items.update(id, data),
     onError: () => {
       for (const key of ['items', 'requests', 'actuals', 'dashboard']) queryClient.invalidateQueries({ queryKey: [key] });
     },
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       for (const key of ['items', 'requests', 'actuals', 'dashboard']) queryClient.invalidateQueries({ queryKey: [key] });
-      closeAdjustment();
+      variables.clearDraft();
     },
   });
 
-  const [budgetNum, setBudgetNum] = useState('');
-  const [buildingType, setBuildingType] = useState('');
-  const [buildingSubtype, setBuildingSubtype] = useState('');
+  const [view, setView, , viewStorageError] = usePersistentState('actuals-view', ACTUALS_VIEW, { validate: isActualsView });
+  const { budgetNum, buildingType, buildingSubtype } = view;
+  const updateView = (values) => setView((current) => ({ ...current, ...values }));
   const params = {};
-  const ps = getEffectiveProjectSite();
   if (ps) params.project_site = ps;
 
-  const { data: items = [], error: itemsError, isLoading: itemsLoading, refetch: retryItems } = useQuery({
+  const { data: items = [], error: itemsError, isLoading: itemsLoading, isFetching: itemsFetching, isFetchedAfterMount: itemsFresh, refetch: retryItems } = useQuery({
     queryKey: ['items', params],
     queryFn: () => api.items.list(params),
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
 
   const { data: actuals = [], error: actualsError, isLoading: actualsLoading, refetch: retryActuals } = useQuery({
@@ -61,7 +72,10 @@ export default function Actuals() {
 
   const loadError = itemsError || actualsError;
   if (loadError) return <LoadError error={loadError} onRetry={() => { retryItems(); retryActuals(); }} />;
-  if (itemsLoading || actualsLoading) return <div className="card" role="status">Loading...</div>;
+  if (itemsLoading || actualsLoading || !itemsFresh) return <div className="card" role="status">Loading...</div>;
+
+  const { item: adjustItem, changed: adjustmentChanged } = resolveRecordDraft('availability', adjustDraft, items, isAdmin);
+  const adjustmentNeedsReview = adjustmentChanged && !isReviewCurrent('availability', adjustDraft, adjustItem, review.scope === actionScope ? review.values : null);
 
   let filteredItems = items;
   if (budgetNum) filteredItems = filteredItems.filter((i) => matchesBudget(i.budget, budgetNum));
@@ -100,6 +114,11 @@ export default function Actuals() {
     downloadBlob(new Blob(['\uFEFF', toCSV(rows)], { type: 'text/csv;charset=utf-8' }), 'istrom-actuals.csv');
   };
   const adjustmentValid = adjustQty !== '' && adjustCost !== '' && Number.isFinite(Number(adjustQty)) && Number(adjustQty) >= 0 && Number.isFinite(Number(adjustCost)) && Number(adjustCost) >= 0;
+  const budgets = budgetNumberOptions(items);
+  const saveAdjustment = () => {
+    if (!isAdmin || !adjustItem || !adjustmentValid || adjustmentNeedsReview || itemsFetching) return;
+    adjustment.mutate({ id: adjustItem.id, clearDraft: clearAdjustDraft, data: { qty: Number(adjustQty) * (adjustOver ? -1 : 1), unit_cost: Number(adjustCost), expected_qty: Number(adjustItem.qty), expected_unit_cost: Number(adjustItem.unit_cost), expected_created_at: adjustItem.created_at } });
+  };
 
   return <div className="actuals-page">
     <div className="page-heading">
@@ -108,15 +127,17 @@ export default function Actuals() {
     </div>
     <div className="card">
       <ErrorMessage error={adjustment.error} />
+      <ErrorMessage error={viewStorageError || draftStorageError} />
+      {isAdmin && adjustDraft && !adjustItem && <div className="alert alert-warning" role="status">The item in your saved adjustment is no longer available. <button className="btn btn-secondary btn-sm" onClick={closeAdjustment}>Discard adjustment</button></div>}
       <div className="actuals-filters">
         <div className="form-group"><label htmlFor="actuals-budget">Budget number</label>
-          <select id="actuals-budget" value={budgetNum} onChange={(e) => setBudgetNum(e.target.value)}><option value="">All budgets</option>{budgetNumberOptions(items).map((budget) => <option key={budget} value={budget}>{budget}</option>)}</select>
+          <select id="actuals-budget" value={budgetNum} onChange={(e) => updateView({ budgetNum: e.target.value })}><option value="">All budgets</option>{budgetNum && !budgets.includes(budgetNum) && <option value={budgetNum}>{budgetNum} (unavailable)</option>}{budgets.map((budget) => <option key={budget} value={budget}>{budget}</option>)}</select>
         </div>
         <div className="form-group"><label htmlFor="actuals-building">Building type</label>
-          <select id="actuals-building" value={buildingType} onChange={(e) => { setBuildingType(e.target.value); setBuildingSubtype(''); }}><option value="">All building types</option>{PROPERTY_TYPES.filter((t) => t && t !== 'All').map((t) => <option key={t} value={t}>{t}</option>)}</select>
+          <select id="actuals-building" value={buildingType} onChange={(e) => updateView({ buildingType: e.target.value, buildingSubtype: '' })}><option value="">All building types</option>{buildingType && !PROPERTY_TYPES.includes(buildingType) && <option value={buildingType}>{buildingType} (unavailable)</option>}{PROPERTY_TYPES.filter((t) => t && t !== 'All').map((t) => <option key={t} value={t}>{t}</option>)}</select>
         </div>
-        {needsSubtype && <div className="form-group"><label htmlFor="actuals-block">{BUILDING_SUBTYPE_LABELS[buildingType]}</label>
-          <select id="actuals-block" value={buildingSubtype} onChange={(e) => setBuildingSubtype(e.target.value)}><option value="">All</option>{subtypeOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+        {(needsSubtype || buildingSubtype) && <div className="form-group"><label htmlFor="actuals-block">{BUILDING_SUBTYPE_LABELS[buildingType] || 'Building'}</label>
+          <select id="actuals-block" value={buildingSubtype} onChange={(e) => updateView({ buildingSubtype: e.target.value })}><option value="">All</option>{buildingSubtype && !subtypeOptions.includes(buildingSubtype) && <option value={buildingSubtype}>{buildingSubtype} (unavailable)</option>}{subtypeOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
         </div>}
       </div>
       <div className="metrics-row actuals-summary">
@@ -142,7 +163,7 @@ export default function Actuals() {
                 <td className="numeric">{formatNaira(plannedAmount(item))}<small>{formatNaira(plannedUnitCost(item))} / {item.unit}</small></td>
                 <td className="numeric">{formatNaira(record.cost)}<small>{formatNaira(record.averageUnitCost)} / {item.unit} average</small></td>
                 <td className={`numeric${record.balance < 0 ? ' actuals-negative' : ''}`}>{record.balance === 0 ? 'On budget' : <>{formatNaira(Math.abs(record.balance))}<small>{record.balance < 0 ? 'Over budget' : 'Remaining budget'}</small></>}</td>
-                {isAdmin && <td><button className="btn btn-secondary btn-sm" aria-label={`Adjust availability for ${item.name}`} onClick={() => { adjustment.reset(); setAdjustItem(item); setAdjustOver(item.qty < 0); setAdjustQty(String(Math.abs(item.qty))); setAdjustCost(String(item.unit_cost)); }}>Adjust</button></td>}
+                {isAdmin && <td><button className="btn btn-secondary btn-sm" aria-label={`Adjust availability for ${item.name}`} onClick={() => { adjustment.reset(); setReview({ scope: actionScope, values: null }); setAdjustDraft(availabilityDraftFor(item)); }}>Adjust</button></td>}
               </tr>;
             })}</tbody>
           </table>
@@ -153,12 +174,14 @@ export default function Actuals() {
       <h3 id="adjust-availability-title">Adjust {adjustItem.name}</h3>
       <p className="caption">Enter the current available quantity or the outstanding shortfall.</p>
       <ErrorMessage error={adjustment.error} />
+      <ErrorMessage error={draftStorageError} />
+      {adjustmentNeedsReview && <div className="alert alert-warning" role="status">Availability changed while this adjustment was open. Current {adjustItem.qty < 0 ? 'over quantity' : 'available quantity'}: {formatQuantity(Math.abs(adjustItem.qty))} {adjustItem.unit}; unit cost: {formatNaira(adjustItem.unit_cost)}. <button className="btn btn-secondary btn-sm" disabled={itemsFetching} onClick={() => setReview({ scope: actionScope, values: reviewedRecordFor('availability', adjustDraft, adjustItem) })}>I have reviewed these values</button></div>}
       <div className="form-row">
-        <div className="form-group"><label htmlFor="adjust-position">Quantity position</label><select id="adjust-position" disabled={adjustment.isPending} value={adjustOver ? 'over' : 'available'} onChange={(e) => setAdjustOver(e.target.value === 'over')}><option value="available">Available quantity</option><option value="over">Over quantity</option></select></div>
-        <div className="form-group"><label htmlFor="adjust-qty">{adjustOver ? 'Over quantity' : 'Available quantity'} ({adjustItem.unit})</label><input id="adjust-qty" type="number" min={0} step="any" disabled={adjustment.isPending} value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} /></div>
-        <div className="form-group"><label htmlFor="adjust-cost">Current unit cost (₦)</label><input id="adjust-cost" type="number" min={0} step="0.01" disabled={adjustment.isPending} value={adjustCost} onChange={(e) => setAdjustCost(e.target.value)} /></div>
+        <div className="form-group"><label htmlFor="adjust-position">Quantity position</label><select id="adjust-position" disabled={adjustment.isPending} value={adjustOver ? 'over' : 'available'} onChange={(e) => updateAdjustment({ over: e.target.value === 'over' })}><option value="available">Available quantity</option><option value="over">Over quantity</option></select></div>
+        <div className="form-group"><label htmlFor="adjust-qty">{adjustOver ? 'Over quantity' : 'Available quantity'} ({adjustItem.unit})</label><input id="adjust-qty" type="number" min={0} step="any" disabled={adjustment.isPending} value={adjustQty} onChange={(e) => updateAdjustment({ qty: e.target.value })} /></div>
+        <div className="form-group"><label htmlFor="adjust-cost">Current unit cost (₦)</label><input id="adjust-cost" type="number" min={0} step="0.01" disabled={adjustment.isPending} value={adjustCost} onChange={(e) => updateAdjustment({ cost: e.target.value })} /></div>
       </div>
-      <div className="modal-actions"><button className="btn btn-primary" disabled={!adjustmentValid || adjustment.isPending} onClick={() => adjustment.mutate({ id: adjustItem.id, data: { qty: Number(adjustQty) * (adjustOver ? -1 : 1), unit_cost: Number(adjustCost), expected_qty: adjustItem.qty } })}>{adjustment.isPending ? 'Saving…' : 'Save availability'}</button><button className="btn btn-secondary" disabled={adjustment.isPending} onClick={closeAdjustment}>Cancel</button></div>
+      <div className="modal-actions"><button className="btn btn-primary" disabled={!adjustmentValid || adjustmentNeedsReview || itemsFetching || adjustment.isPending} onClick={saveAdjustment}>{adjustment.isPending ? 'Saving…' : 'Save availability'}</button><button className="btn btn-secondary" disabled={adjustment.isPending} onClick={closeAdjustment}>Cancel</button></div>
     </Modal>}
   </div>;
 }

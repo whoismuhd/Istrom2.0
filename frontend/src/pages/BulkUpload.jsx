@@ -1,12 +1,14 @@
-import { IMPORT_FIELDS, importRowKey as rowKey, importRowIssues, importMappingIssues, importCategoryForGroup, numericImportValue, mappingChanged, mappingPayload, sheetReconciliation } from '../utils/imports.js';
+import { IMPORT_FIELDS, importRowKey as rowKey, importRowIssues, importMappingIssues, importCategoryForGroup, numericImportValue, mappingChanged, mappingPayload, sheetReconciliation, importPreviewExpiresAt, sameImportPreviewSources, importPreviewMappings } from '../utils/imports.js';
 import LoadError from '../components/LoadError';
 import { useAuth } from '../contexts/useAuth';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, formatNaira } from '../api';
 import './BulkUpload.css';
 import { downloadBlob } from '../utils/downloads';
 import { decimalProduct, sumDecimals } from '../utils/numbers';
+import { readImportDraft, saveImportDraft, clearImportDraft, IMPORT_DRAFT_MAX_FILE_SIZE, captureImportDraftIdentity, isCurrentImportDraftIdentity } from '../utils/importDrafts';
+import { workspaceGeneration } from '../utils/workspaceState';
 
 const BUILDING_TYPES = ['Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
 const BUDGET_NUMBERS = Array.from({ length: 20 }, (_, i) => i + 1);
@@ -20,6 +22,7 @@ export default function BulkUpload() {
   const [step, setStep] = useState(1);
   const [projectSite, setProjectSite] = useState(() => getEffectiveProjectSite() || user?.project_site || '');
   const [file, setFile] = useState(null);
+  const [fileName, setFileName] = useState('');
   const [analysis, setAnalysis] = useState(null);
   const [columnMappings, setColumnMappings] = useState({});
   const [sheetMeta, setSheetMeta] = useState({});
@@ -30,8 +33,71 @@ export default function BulkUpload() {
   const [issuesOnly, setIssuesOnly] = useState(false);
   const [rowPage, setRowPage] = useState(0);
   const [reviewConfirmed, setReviewConfirmed] = useState(false);
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftError, setDraftError] = useState('');
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [previewClock, setPreviewClock] = useState(Date.now);
+  const pendingSaves = useRef(0);
+  const mounted = useRef(false);
+  const fileInput = useRef(null);
 
-  const { data: globalSites = [], error: sitesError, refetch: retrySites } = useQuery({
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    readImportDraft(user).then((draft) => {
+      if (!active || !draft) return;
+      setProjectSite(draft.projectSite);
+      setFile(draft.file || null);
+      setFileName(draft.file?.name || draft.fileName || draft.analysis?.file_name || '');
+      setAnalysis(draft.analysis || null);
+      setColumnMappings(draft.columnMappings || {});
+      setSheetMeta(draft.sheetMeta || {});
+      setRowEdits(draft.rowEdits || {});
+      const restoredSheets = draft.analysis?.sheets || [];
+      setActiveSheetName(restoredSheets.some((sheet) => sheet.sheet_name === draft.activeSheetName)
+        ? draft.activeSheetName : restoredSheets[0]?.sheet_name || '');
+      setRowSearch(typeof draft.rowSearch === 'string' ? draft.rowSearch : '');
+      setIssuesOnly(draft.issuesOnly === true);
+      setRowPage(Number.isSafeInteger(draft.rowPage) && draft.rowPage >= 0 ? draft.rowPage : 0);
+      setReviewConfirmed(draft.reviewConfirmed === true);
+      setStep(draft.analysis ? 2 : 1);
+      if (!draft.file && (draft.fileName || draft.analysis?.file_name)) {
+        setDraftError('The saved workbook could not be restored. Choose it again.');
+      }
+    }).catch(() => {
+      if (active) setDraftError('This browser could not restore the saved preview.');
+    }).finally(() => { if (active) setDraftReady(true); });
+    return () => { active = false; };
+  }, [user]);
+
+  useEffect(() => {
+    if (!draftReady || step !== 2 || !analysis) return;
+    let active = true;
+    pendingSaves.current += 1;
+    saveImportDraft(user, { projectSite, file, analysis, columnMappings, sheetMeta, rowEdits,
+      activeSheetName, rowSearch, issuesOnly, rowPage, reviewConfirmed }).then(() => {
+      if (active) { setDraftSaving(false); setDraftError(file ? '' : 'The saved workbook could not be restored. Choose it again.'); }
+    }).catch(() => {
+      if (active) { setDraftSaving(false); setDraftError('Preview could not be saved in this browser. Keep this tab open until you finish.'); }
+    }).finally(() => { pendingSaves.current -= 1; });
+    return () => { active = false; };
+  }, [draftReady, step, user, projectSite, file, analysis, columnMappings, sheetMeta, rowEdits,
+    activeSheetName, rowSearch, issuesOnly, rowPage, reviewConfirmed]);
+
+  useEffect(() => {
+    const beforeUnload = (event) => {
+      if (pendingSaves.current > 0) { event.preventDefault(); event.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    const timer = window.setInterval(() => setPreviewClock(Date.now()), 30000);
+    return () => { window.removeEventListener('beforeunload', beforeUnload); window.clearInterval(timer); };
+  }, []);
+
+  const { data: globalSites = [], error: sitesError, isPending: sitesLoading, refetch: retrySites } = useQuery({
     queryKey: ['projectSites'],
     queryFn: () => api.projectSites.list(),
     enabled: isGlobalAdmin,
@@ -46,10 +112,88 @@ export default function BulkUpload() {
   const groupOptions =
     constants.BUDGET_CATEGORIES ||
     ['General Materials', 'Woods', 'Plumbings', 'Irons', 'Labour', 'Electrical', 'Mechanical'];
+  const previewExpired = Boolean(analysis) && importPreviewExpiresAt(analysis) <= previewClock;
+  const siteAvailable = sites.some((site) => site.name === projectSite);
+
+  const markDraftChanged = () => setDraftSaving(true);
+  const persistStagedDraft = async (nextSite, nextFile, nextName, replaceFile = false) => {
+    pendingSaves.current += 1;
+    setDraftSaving(true);
+    try {
+      // Remove the old pointer immediately when the file is cleared or replaced.
+      const removing = replaceFile ? clearImportDraft() : null;
+      const saving = nextSite || nextName
+        ? saveImportDraft(user, { stage: 'workbook', projectSite: nextSite, fileName: nextName, analysis: null, file: nextFile })
+        : clearImportDraft();
+      await Promise.all([removing, saving]);
+      setDraftError(!nextFile && nextName ? 'The saved workbook could not be restored. Choose it again.' : '');
+      return true;
+    } catch {
+      setDraftError('Draft could not be saved in this browser. Keep this tab open until you finish.');
+      return false;
+    } finally {
+      pendingSaves.current -= 1;
+      if (pendingSaves.current === 0) setDraftSaving(false);
+    }
+  };
+  const selectWorkbook = (event) => {
+    const nextFile = event.target.files?.[0] || null;
+    const nextName = nextFile?.name || '';
+    setFile(nextFile);
+    setFileName(nextName);
+    setAnalysis(null);
+    setColumnMappings({});
+    setFeedback(nextFile && nextFile.size > IMPORT_DRAFT_MAX_FILE_SIZE
+      ? { type: 'warning', message: 'Choose a workbook no larger than 15 MB.' } : { type: '', message: '' });
+    persistStagedDraft(projectSite, nextFile, nextName, true);
+  };
+  const discardDraft = () => {
+    clearImportDraft().catch(() => setDraftError('Could not remove the saved preview from this browser.'));
+    setStep(1);
+    setFile(null);
+    setFileName('');
+    if (fileInput.current) fileInput.current.value = '';
+    setAnalysis(null);
+    setColumnMappings({});
+    setSheetMeta({});
+    setRowEdits({});
+    setReviewConfirmed(false);
+    setFeedback({ type: '', message: '' });
+    setDraftSaving(false);
+    setDraftError('');
+  };
 
   const analyzeMutation = useMutation({
-    mutationFn: (mappings) => api.bulkUpload.analyze({ file, projectSite, mappings }),
-    onSuccess: (data) => {
+    mutationFn: async (variables) => {
+      const { mappings, staged = false, selectedFile = file, selectedSite = projectSite } = variables;
+      variables.sessionGeneration = workspaceGeneration();
+      if (staged) await persistStagedDraft(selectedSite, selectedFile, selectedFile.name);
+      if (!mounted.current || variables.sessionGeneration !== workspaceGeneration()) {
+        throw new Error('The import screen is no longer open.');
+      }
+      variables.draftIdentity = captureImportDraftIdentity();
+      return api.bulkUpload.analyze({ file: selectedFile, projectSite: selectedSite, mappings });
+    },
+    onSuccess: (data, { keepEdits, draftIdentity, sessionGeneration, replacementFile, previousAnalysis }) => {
+      if (!mounted.current || sessionGeneration !== workspaceGeneration()
+        || (draftIdentity && !isCurrentImportDraftIdentity(draftIdentity))) return;
+      if (keepEdits) {
+        if (!sameImportPreviewSources(previousAnalysis || analysis, data)) {
+          setFeedback({ type: 'error', message: 'Choose the original workbook. Your edits are unchanged.' });
+          return;
+        }
+        markDraftChanged();
+        if (replacementFile) {
+          setFile(replacementFile);
+          setFileName(replacementFile.name);
+          setDraftError('');
+        }
+        setAnalysis(data);
+        setReviewConfirmed(false);
+        setPreviewClock(Date.now());
+        setFeedback({ type: '', message: '' });
+        return;
+      }
       const meta = {};
       const edits = {};
       for (const s of data.sheets) {
@@ -81,41 +225,76 @@ export default function BulkUpload() {
         skip: layout.status === 'skipped',
       }])));
       setStep(2);
+      markDraftChanged();
+      setPreviewClock(Date.now());
       setFeedback({ type: '', message: '' });
     },
-    onError: (err) =>
-      setFeedback({ type: 'error', message: err?.message || 'Could not read the file.' }),
+    onError: (err, { draftIdentity, sessionGeneration }) => {
+      if (mounted.current && sessionGeneration === workspaceGeneration()
+        && (!draftIdentity || isCurrentImportDraftIdentity(draftIdentity))) {
+        setFeedback({ type: 'error', message: err?.message || 'Could not read the file.' });
+      }
+    },
   });
 
+  const recoverWorkbook = (event) => {
+    const replacementFile = event.target.files?.[0];
+    event.target.value = '';
+    if (!replacementFile) return;
+    if (!replacementFile.name.toLowerCase().endsWith('.xlsx')) {
+      setFeedback({ type: 'warning', message: 'Choose the original .xlsx workbook.' });
+      return;
+    }
+    if (replacementFile.size > IMPORT_DRAFT_MAX_FILE_SIZE) {
+      setFeedback({ type: 'warning', message: 'Choose a workbook no larger than 15 MB.' });
+      return;
+    }
+    setFeedback({ type: '', message: '' });
+    analyzeMutation.mutate({ mappings: importPreviewMappings(analysis), keepEdits: true,
+      selectedFile: replacementFile, replacementFile, selectedSite: projectSite, previousAnalysis: analysis });
+  };
+
   const commitMutation = useMutation({
-    mutationFn: (rows) => api.bulkUpload.commit({ projectSite, skipExisting: true, rows, previewToken: analysis.preview_token,
-      sheetChecks: analysis.sheets.filter((s) => sheetMeta[s.sheet_name]?.included).map((s) => ({ sheet_name: s.sheet_name,
-        multiplier: Number(sheetMeta[s.sheet_name].multiplier), budget_scope: sheetMeta[s.sheet_name].budgetScope.trim(),
-        confirmed: reviewConfirmed, reviewed_total: numericImportValue(sheetMeta[s.sheet_name].reviewedTotal) })) }),
-    onSuccess: (res) => {
+    mutationFn: (variables) => {
+      variables.draftIdentity = captureImportDraftIdentity();
+      return api.bulkUpload.commit({ projectSite, skipExisting: true, rows: variables.rows, previewToken: analysis.preview_token,
+        sheetChecks: analysis.sheets.filter((s) => sheetMeta[s.sheet_name]?.included).map((s) => ({ sheet_name: s.sheet_name,
+          multiplier: Number(sheetMeta[s.sheet_name].multiplier), budget_scope: sheetMeta[s.sheet_name].budgetScope.trim(),
+          confirmed: reviewConfirmed, reviewed_total: numericImportValue(sheetMeta[s.sheet_name].reviewedTotal) })) });
+    },
+    onSuccess: (res, { draftIdentity }) => {
       queryClient.invalidateQueries({ queryKey: ['items'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['actuals'] });
+      if (!mounted.current || (draftIdentity && !isCurrentImportDraftIdentity(draftIdentity))) return;
+      if (draftIdentity) clearImportDraft(draftIdentity).catch(() => setDraftError('Could not remove the saved preview from this browser.'));
       setStep(3);
+      setDraftSaving(false);
       setFeedback({
         type: 'success',
         message: `${res.inserted_count} ${res.inserted_count === 1 ? 'item' : 'items'} imported${res.skipped.length ? ` · ${res.skipped.length} skipped` : ''}.`,
       });
     },
-    onError: (err) =>
-      setFeedback({ type: 'error', message: err?.message || 'Import failed.' }),
+    onError: (err, { draftIdentity }) => {
+      if (mounted.current && (!draftIdentity || isCurrentImportDraftIdentity(draftIdentity))) {
+        setFeedback({ type: 'error', message: err?.message || 'Import failed.' });
+      }
+    },
   });
 
   const setSheetField = (sheetName, field, value) => {
+    markDraftChanged();
     setReviewConfirmed(false);
     setSheetMeta((prev) => ({ ...prev, [sheetName]: { ...prev[sheetName], [field]: value } }));
   };
   const setRowField = (k, field, value) => {
+    markDraftChanged();
     setReviewConfirmed(false);
     setRowEdits((prev) => ({ ...prev, [k]: { ...prev[k], [field]: value,
       ...(field === 'grp' ? { category: importCategoryForGroup(value, prev[k]?.category) } : {}) } }));
   };
   const toggleRow = (k) => {
+    markDraftChanged();
     setReviewConfirmed(false);
     setRowEdits((prev) => ({ ...prev, [k]: { ...prev[k], excluded: !prev[k]?.excluded } }));
   };
@@ -124,6 +303,7 @@ export default function BulkUpload() {
   const setSheetAllRows = (sheetName, field, value) => {
     const sheet = analysis?.sheets.find((s) => s.sheet_name === sheetName);
     if (!sheet || !value) return;
+    markDraftChanged();
     setReviewConfirmed(false);
     setRowEdits((prev) => {
       const next = { ...prev };
@@ -173,6 +353,7 @@ export default function BulkUpload() {
   const activeSheet = activeReview?.sheet;
   const activeMeta = activeReview?.meta;
   const selectSheet = (name) => {
+    markDraftChanged();
     setActiveSheetName(name);
     setRowSearch('');
     setIssuesOnly(false);
@@ -194,20 +375,24 @@ export default function BulkUpload() {
   const handleAnalyze = (e) => {
     e.preventDefault();
     if (!projectSite) return setFeedback({ type: 'warning', message: 'Select a project site first.' });
+    if (!siteAvailable) return setFeedback({ type: 'warning', message: 'Choose an active project site.' });
     if (!file) return setFeedback({ type: 'warning', message: 'Choose a .xlsx file.' });
-    analyzeMutation.mutate({});
+    if (file.size > IMPORT_DRAFT_MAX_FILE_SIZE) return setFeedback({ type: 'warning', message: 'Choose a workbook no larger than 15 MB.' });
+    analyzeMutation.mutate({ mappings: {}, staged: true, selectedFile: file, selectedSite: projectSite });
   };
 
   const layouts = analysis?.layouts || [];
   const mappingsDirty = layouts.some((layout) => mappingChanged(layout, columnMappings[layout.sheet_name]));
   const unresolvedSheets = layouts.filter((layout) => layout.status === 'needs_mapping').length;
   const changeMapping = (sheetName, field, value) => {
+    markDraftChanged();
     setReviewConfirmed(false);
     setColumnMappings((prev) => ({ ...prev, [sheetName]: {
       ...prev[sheetName], columns: { ...prev[sheetName].columns, [field]: value === '' ? undefined : Number(value) },
     } }));
   };
   const changeMappingOption = (sheetName, field, value) => {
+    markDraftChanged();
     setReviewConfirmed(false);
     setColumnMappings((prev) => ({ ...prev, [sheetName]: { ...prev[sheetName], [field]: value } }));
   };
@@ -220,7 +405,7 @@ export default function BulkUpload() {
     ];
   });
   const importBlocked = includedRows.length === 0 || incompleteCount > 0 || budgetsNeedingFixes.length > 0
-    || mappingsDirty || unresolvedSheets > 0 || includedRows.length > 2000;
+    || mappingsDirty || unresolvedSheets > 0 || includedRows.length > 2000 || previewExpired || !siteAvailable;
 
   const handleDownloadTemplate = async () => {
     try {
@@ -233,9 +418,11 @@ export default function BulkUpload() {
 
   if (sitesError || constantsError) return <LoadError error={sitesError || constantsError} onRetry={() => { retrySites(); retryConstants(); }} />;
   if (user?.user_type !== 'admin') return <div className="card">Administrator access is required to import inventory.</div>;
+  if (!draftReady) return <div className="card" role="status">Loading preview…</div>;
 
   return (
     <div className="bulk-upload-page">
+      {draftError && <div role="status" className="alert bulk-alert bulk-alert-warning">{draftError}</div>}
       {feedback.message && step !== 3 && <div role="status" className={`alert bulk-alert bulk-alert-${feedback.type}`}>{feedback.message}</div>}
       {step === 1 && <div className="card">
         <h1>Import workbook</h1>
@@ -243,8 +430,9 @@ export default function BulkUpload() {
             <div className="form-row">
               <div className="form-group">
                 <label htmlFor="import-project-site">Project site (required)</label>
-                <select id="import-project-site" value={projectSite} onChange={(e) => setProjectSite(e.target.value)} disabled={analyzeMutation.isPending} required>
+                <select id="import-project-site" value={projectSite} onChange={(e) => { setProjectSite(e.target.value); persistStagedDraft(e.target.value, file, fileName); }} disabled={analyzeMutation.isPending} required>
                   <option value="">Select project site…</option>
+                  {projectSite && !siteAvailable && <option value={projectSite}>{projectSite} (unavailable)</option>}
                   {sites.map((s) => (
                     <option key={s.id} value={s.name}>{s.name}</option>
                   ))}
@@ -252,8 +440,9 @@ export default function BulkUpload() {
               </div>
               <div className="form-group form-group-wide">
                 <label htmlFor="import-workbook">Excel workbook (.xlsx)</label>
-                <input id="import-workbook" type="file" accept=".xlsx" disabled={analyzeMutation.isPending}
-                  onChange={(e) => { setFile(e.target.files?.[0] || null); setAnalysis(null); setColumnMappings({}); }} required />
+                <input ref={fileInput} id="import-workbook" type="file" accept=".xlsx" disabled={analyzeMutation.isPending}
+                  onChange={selectWorkbook} required={!file} />
+                {(file?.name || fileName) && <p className="caption">{file?.name || fileName}{file && !draftError ? ` · ${draftSaving ? 'Saving…' : 'Draft saved'}` : ''}</p>}
               </div>
             </div>
             <div className="action-bar">
@@ -263,6 +452,7 @@ export default function BulkUpload() {
               <button className="btn btn-secondary" type="button" onClick={handleDownloadTemplate}>
                 Download blank template
               </button>
+              {(file || fileName) && <button className="btn btn-secondary" type="button" disabled={analyzeMutation.isPending} onClick={discardDraft}>Discard draft</button>}
             </div>
           </form>
       </div>}
@@ -271,10 +461,23 @@ export default function BulkUpload() {
         <div className="card bulk-preview-card">
           <fieldset className="bulk-review-fields" disabled={analyzeMutation.isPending || commitMutation.isPending}>
             <div className="bulk-preview-heading">
-              <div><h1>Budget preview</h1><p className="caption">{analysis.file_name} · {projectSite}</p></div>
+              <div><h1>Budget preview</h1><p className="caption">{analysis.file_name} · {projectSite}{!draftError && ` · ${draftSaving ? 'Saving…' : 'Draft saved'}`}</p></div>
               <div className="bulk-preview-summary"><span>{includedRows.length} items selected</span><strong>{formatNaira(reviewedTotal)}</strong></div>
             </div>
             <p className="caption bulk-edit-hint">Edit cells or uncheck rows to exclude them.</p>
+            {(!isGlobalAdmin || !sitesLoading) && !siteAvailable && <div role="status" className="alert bulk-alert-warning">This project site is no longer available. Choose another file and an active project site.</div>}
+            {previewExpired && <div role="status" className="alert bulk-alert-warning">
+              This preview expired. Refresh it to continue; your table edits will be kept.
+              <button type="button" className="btn btn-secondary btn-sm" disabled={!file || !siteAvailable}
+                onClick={() => analyzeMutation.mutate({ mappings: importPreviewMappings(analysis),
+                  keepEdits: true, previousAnalysis: analysis })}>Refresh preview</button>
+            </div>}
+            {!file && <div className="form-group">
+              <label htmlFor="restore-import-workbook">Reselect original workbook (.xlsx)</label>
+              <input id="restore-import-workbook" type="file" accept=".xlsx" disabled={!siteAvailable}
+                onChange={recoverWorkbook} />
+              <p className="caption">Your table edits will be kept after the file is verified.</p>
+            </div>}
 
             {activeSheet && <>
               <div className="bulk-budget-picker">
@@ -442,8 +645,8 @@ export default function BulkUpload() {
             })}
             {(mappingsDirty || unresolvedSheets > 0) && <div className="alert bulk-alert-warning">Check or exclude every sheet that needs column mapping, then update the preview before importing.</div>}
             {mappingErrors.length > 0 && <ul className="bulk-sheet-warnings">{mappingErrors.map((error) => <li key={error}>{error}</li>)}</ul>}
-            <button type="button" className="btn btn-secondary" disabled={analyzeMutation.isPending || mappingErrors.length > 0 || commitMutation.isPending}
-              onClick={() => analyzeMutation.mutate(mappingPayload(layouts, columnMappings))}>
+            <button type="button" className="btn btn-secondary" disabled={!file || analyzeMutation.isPending || mappingErrors.length > 0 || commitMutation.isPending}
+              onClick={() => analyzeMutation.mutate({ mappings: mappingPayload(layouts, columnMappings) })}>
               {analyzeMutation.isPending ? 'Updating…' : 'Apply column settings'}
             </button>
 
@@ -460,15 +663,15 @@ export default function BulkUpload() {
 
             <div className="bulk-import-footer">
               <label className="bulk-toggle"><input type="checkbox" checked={reviewConfirmed} disabled={importBlocked}
-                onChange={(e) => setReviewConfirmed(e.target.checked)} />I confirm the selected items, building scopes and totals.</label>
+                onChange={(e) => { markDraftChanged(); setReviewConfirmed(e.target.checked); }} />I confirm the selected items, building scopes and totals.</label>
               {analysis.duplicate_count > 0 && <p className="caption">{analysis.duplicate_count} already imported rows will be skipped.</p>}
               {includedRows.length > 2000 && <p className="bulk-error-note">Select up to 2,000 items per import.</p>}
               {(unresolvedSheets > 0 || mappingsDirty) && <p className="bulk-error-note">Apply the column settings before importing.</p>}
               {budgetsNeedingFixes.length > 0 && <p className="bulk-error-note">Fix or exclude the {budgetsNeedingFixes.length} highlighted {budgetsNeedingFixes.length === 1 ? 'budget' : 'budgets'} before importing.</p>}
               <div className="action-bar">
-                <button className="btn btn-secondary" type="button" onClick={() => { setStep(1); setReviewConfirmed(false); }}>Choose another file</button>
+                <button className="btn btn-secondary" type="button" onClick={discardDraft}>Discard preview</button>
                 <button className="btn btn-primary" type="button" disabled={importBlocked || !reviewConfirmed}
-                  onClick={() => commitMutation.mutate(includedRows)}>{commitMutation.isPending ? 'Importing…' : `Import ${includedRows.length} items`}</button>
+                  onClick={() => commitMutation.mutate({ rows: includedRows })}>{commitMutation.isPending ? 'Importing…' : `Import ${includedRows.length} items`}</button>
               </div>
             </div>
           </fieldset>
@@ -480,7 +683,7 @@ export default function BulkUpload() {
           <h3>Import complete</h3>
           <p className="caption">{feedback.message}</p>
           <button className="btn btn-primary" type="button"
-            onClick={() => { setStep(1); setFile(null); setAnalysis(null); }}>
+            onClick={discardDraft}>
             Import another file
           </button>
         </div>

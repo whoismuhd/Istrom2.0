@@ -1,6 +1,6 @@
 """Requests routes."""
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -13,9 +13,14 @@ from api.services.notification_hub import notification_hub
 from api.services.push_service import send_push_for_notification
 from api.services.inventory_records import lock_linked_item, finite_cost_total, change_item_quantity
 from api.services.project_records import lock_project_records
+from api.services.creation_receipts import claim_creation, retire_creation_receipts
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 ALLOWED_REQUEST_STATUSES = {"Pending", "Approved", "Rejected"}
+
+
+def _utc_creation_time(value):
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
 
 
 def _queue_notification_created_event(background_tasks: BackgroundTasks, notif: Notification):
@@ -101,8 +106,19 @@ def create_request(
     project_site = require_active_project_site(db, user, requested_site)
     if item.project_site != project_site:
         raise HTTPException(403, "Item does not belong to selected project site")
+    if 'expected_item_created_at' in data.model_fields_set:
+        if (data.expected_item_created_at is None or item.created_at is None
+                or _utc_creation_time(data.expected_item_created_at) != _utc_creation_time(item.created_at)):
+            db.rollback()
+            raise HTTPException(409, 'The selected inventory item was replaced or its identity could not be verified. Refresh and select the item again.')
     finite_cost_total(data.qty, data.current_price if data.current_price is not None else item.unit_cost)
     requested_by = user.get("username") or "Unknown"
+    payload = data.model_dump(exclude={'submission_key', 'requested_by', 'expected_item_created_at'})
+    payload['project_site'] = project_site
+    receipt, existing = claim_creation(db, user, 'request', data.submission_key, payload, Request)
+    if existing is not None:
+        enforce_record_scope(user, existing.project_site)
+        return existing
 
     req = Request(
         item_id=data.item_id,
@@ -118,6 +134,8 @@ def create_request(
     )
     db.add(req)
     db.flush()
+    if receipt is not None:
+        receipt.record_id = req.id
 
     # Notifications: admin (new_request), project site (request_submitted)
     # Get admin users - for now we create for all project sites / global
@@ -333,6 +351,7 @@ def delete_request(
         {Notification.request_id: None}, synchronize_session=False,
     )
     site = req.project_site
+    retire_creation_receipts(db, 'request', req.id)
     db.delete(req)
     db.commit()
     background_tasks.add_task(notification_hub.broadcast_workspace_changed, site)

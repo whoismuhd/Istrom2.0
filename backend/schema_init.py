@@ -8,6 +8,7 @@ from models import (
     ProjectSite,
     User,
     AdminPasswordReset,
+    CreationReceipt,
     Item,
     Request,
     Notification,
@@ -82,6 +83,7 @@ def run_migrations():
     """Add missing columns, then recover a budget baseline for existing items."""
     NotificationRead.__table__.create(bind=engine, checkfirst=True)
     AdminPasswordReset.__table__.create(bind=engine, checkfirst=True)
+    CreationReceipt.__table__.create(bind=engine, checkfirst=True)
     additions = {
         "requests": {"current_price": "REAL", "building_subtype": "VARCHAR(100)", "project_site": "VARCHAR(255)", "approved_shortage_qty": "REAL NOT NULL DEFAULT 0", "requested_by_user_id": "INTEGER", "approved_by_user_id": "INTEGER"},
         "users": {"login_name": "VARCHAR(255)", "password_hash": "TEXT", "session_version": "INTEGER NOT NULL DEFAULT 1", "must_change_password": "BOOLEAN NOT NULL DEFAULT TRUE", "last_login_at": "TIMESTAMP"},

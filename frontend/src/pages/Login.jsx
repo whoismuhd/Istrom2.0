@@ -9,22 +9,30 @@ import ErrorMessage from '../components/ErrorMessage';
 import LoadError from '../components/LoadError';
 import { ADMIN_USERNAME } from '../utils/accounts';
 
+function AccountIcon({ site = false }) {
+  return <svg className="login-account-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {site ? <><path d="M3 21h18M5 21V9l7-5 7 5v12M9 21v-6h6v6M9 10h.01M15 10h.01" /><path d="M3 9 12 2l9 7" /></> : <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>}
+  </svg>;
+}
+
 export default function Login() {
   const { user, loading, sessionError, retrySession } = useAuth();
   if (loading) return <div className="card" role="status">Loading...</div>;
   if (sessionError) return <LoadError error={sessionError} onRetry={retrySession} />;
   if (user) return <Navigate to="/" replace />;
-  return <AuthShell title="Sign in">
-    <div className="login-options">
+  return <AuthShell title="Sign in" description="Select your account type.">
+    <nav className="login-options" aria-label="Account type">
       <Link className="login-option" to="/login/admin">
-        <div><h2>Admin</h2><p>Manage projects, users and approvals.</p></div>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+        <AccountIcon />
+        <div className="login-option-copy"><h2>Admin</h2><p>Projects, users and approvals</p></div>
+        <svg className="login-option-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
       </Link>
       <Link className="login-option" to="/login/site">
-        <div><h2>Site user</h2><p>View your project and submit requests.</p></div>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+        <AccountIcon site />
+        <div className="login-option-copy"><h2>Site user</h2><p>Requests and project records</p></div>
+        <svg className="login-option-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
       </Link>
-    </div>
+    </nav>
   </AuthShell>;
 }
 
@@ -46,6 +54,10 @@ export function PortalLogin({ role }) {
     finally { setPending(false); }
   };
   return <AuthShell title={admin ? 'Admin sign in' : 'Site user sign in'}>
+    <nav className="login-role-switch" aria-label="Account type">
+      <Link to="/login/admin" aria-current={admin ? 'page' : undefined}>Admin</Link>
+      <Link to="/login/site" aria-current={!admin ? 'page' : undefined}>Site user</Link>
+    </nav>
     <form onSubmit={submit} className="login-form">
       {admin ? <input type="hidden" name="username" autoComplete="username" value={ADMIN_USERNAME} /> : <div className="form-group"><label htmlFor="login-username">Username</label><input id="login-username" name="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter your username" autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={80} autoFocus required /></div>}
       <PasswordInput id="login-password" name="password" label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" autoFocus={admin} maxLength={128} required />
@@ -55,7 +67,6 @@ export function PortalLogin({ role }) {
     {admin && setup.data?.setup_required && <p className="login-help"><Link to="/account-setup">Set up the first administrator account</Link></p>}
     {admin && setup.data && !setup.data.setup_required && <p className="login-help"><Link to="/forgot-password">Forgot password?</Link></p>}
     {admin && setup.error && <p className="login-help" role="alert">Could not check account setup. <button type="button" className="btn btn-secondary btn-sm" onClick={() => setup.refetch()}>Retry</button></p>}
-    <p className="login-help"><Link to="/login">Choose another account type</Link></p>
     {!admin && <p className="login-help">Contact your administrator for access or a password reset.</p>}
   </AuthShell>;
 }

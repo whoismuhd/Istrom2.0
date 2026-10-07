@@ -4,20 +4,22 @@ import ErrorMessage from '../components/ErrorMessage';
 import LoadError from '../components/LoadError';
 import RequestDetails from '../components/RequestDetails';
 import { useState } from 'react';
+import usePersistentState from '../hooks/usePersistentState';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatDate } from '../api';
 import './ReviewHistory.css';
+import { runSessionBatch } from '../utils/batchMutations';
 
 export default function ReviewHistory() {
   const { isAdmin, isGlobalAdmin, getEffectiveProjectSite } = useAuth();
   const queryClient = useQueryClient();
 
-  const [statusFilter, setStatusFilter] = useState('Pending');
-  const [historyTab, setHistoryTab] = useState(isAdmin ? 'approved' : 'pending'); // pending | approved | rejected | deleted (deleted only for admin)
+  const [statusFilter, setStatusFilter, , statusStorageError] = usePersistentState('request-status', 'Pending', { validate: (value) => ['', 'Pending', 'Approved', 'Rejected'].includes(value) });
+  const [historyTab, setHistoryTab, , historyStorageError] = usePersistentState('request-history', isAdmin ? 'approved' : 'pending', { validate: (value) => ['pending', 'approved', 'rejected', ...(isAdmin ? ['deleted'] : [])].includes(value) });
   const activeHistoryTab = isAdmin && historyTab === 'pending' ? 'approved' : historyTab;
-  const [bulkIds, setBulkIds] = useState('');
-  const [bulkAction, setBulkAction] = useState('Approved');
+  const [bulkIds, setBulkIds, clearBulkIds, bulkStorageError] = usePersistentState('request-bulk-ids', '');
+  const [bulkAction, setBulkAction, , actionStorageError] = usePersistentState('request-bulk-action', 'Approved', { validate: (value) => ['Approved', 'Rejected', 'Pending'].includes(value) });
   const [bulkError, setBulkError] = useState('');
   const [bulkPending, setBulkPending] = useState(false);
 
@@ -87,15 +89,10 @@ export default function ReviewHistory() {
       return;
     }
     setBulkPending(true);
-    const failed = [];
-    for (const id of ids) {
-      try {
-        await updateMutation.mutateAsync({ id, data: { status: bulkAction, approved_by: 'Admin' } });
-      } catch (error) {
-        failed.push({ id, message: error.message });
-      }
-    }
-    setBulkIds(failed.map((failure) => failure.id).join(', '));
+    const result = await runSessionBatch(ids, (id) =>
+      updateMutation.mutateAsync({ id, data: { status: bulkAction, approved_by: 'Admin' } }));
+    const failed = result.failed.map(({ entry: id, message }) => ({ id, message }));
+    if (clearBulkIds(bulkIds) && failed.length) setBulkIds(failed.map((failure) => failure.id).join(', '));
     setBulkError(failed.map((failure) => `Request ${failure.id}: ${failure.message}`).join('; '));
     setBulkPending(false);
   };
@@ -116,6 +113,7 @@ export default function ReviewHistory() {
 
   return (
     <div className="review-history-page">
+      {(statusStorageError || historyStorageError || bulkStorageError || actionStorageError) && <div role="status" className="alert alert-warning">{statusStorageError || historyStorageError || bulkStorageError || actionStorageError}</div>}
       <ErrorMessage error={bulkError || updateMutation.error || deleteMutation.error || clearDeletedMutation.error} />
       {isAdmin && (
       <div className="card">
@@ -135,17 +133,17 @@ export default function ReviewHistory() {
         </div>
 
         {requests.length > 0 && (
-          <details className="bulk-actions">
+          <details className="bulk-actions" open={Boolean(bulkIds)}>
             <summary>Update multiple requests</summary>
             <div className="bulk-actions-body">
             <div className="form-row">
               <div className="form-group form-group-wide">
                 <label htmlFor="reviewhistory-field-2">Request IDs (comma-separated)</label>
-                <input id="reviewhistory-field-2" value={bulkIds} onChange={(e) => setBulkIds(e.target.value)} placeholder="e.g. 1, 2, 3" />
+                <input id="reviewhistory-field-2" disabled={bulkPending} value={bulkIds} onChange={(e) => setBulkIds(e.target.value)} placeholder="e.g. 1, 2, 3" />
               </div>
               <div className="form-group">
                 <label htmlFor="reviewhistory-field-3">Action</label>
-                <select id="reviewhistory-field-3" value={bulkAction} onChange={(e) => setBulkAction(e.target.value)}>
+                <select id="reviewhistory-field-3" disabled={bulkPending} value={bulkAction} onChange={(e) => setBulkAction(e.target.value)}>
                   <option value="Approved">Approve</option>
                   <option value="Rejected">Reject</option>
                   <option value="Pending">Set pending</option>

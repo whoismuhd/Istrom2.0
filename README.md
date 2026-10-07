@@ -396,6 +396,17 @@ are editable above the table. Amounts and selected totals update as you edit.
 The final review checkbox confirms all selected budgets before import; editing
 again clears that confirmation. Missing fields and total differences block import.
 
+The selected workbook, project site, and review edits are saved locally for the
+current account and tab, including before **Upload & preview**. Refreshing or
+returning to the import page restores the selected file or the review table,
+selected budget, and column settings. A preview that expires can be refreshed
+from the saved workbook while keeping edits to matching source rows. Importing successfully,
+discarding the preview, or signing out clears the draft. Browser storage must
+be available; drafts are retained for up to seven days.
+If the saved file cannot be restored, reselect the original workbook in the
+preview. Its contents and source rows are verified before reattaching it;
+choosing a different workbook leaves the existing edits intact.
+
 For unfamiliar headings, expand the sheet under **Column settings**. Choose
 the header row and columns for item name with quantity and unit cost, or with a
 line amount. Amount-only allowances use quantity 1; missing rates or quantities
@@ -420,3 +431,29 @@ Source warnings remain available beside each item. Zero is a valid value.
 Files can be up to 15 MB, with up to 50 sheets, 10,000 rows and 100 columns per
 sheet. One import accepts at most 2,000 selected items. Previewing and remapping
 do not write inventory; only the final **Import** button saves the selected rows.
+
+### Unfinished work and refreshes
+
+Request and manual-entry forms, inventory and availability edits, project-site
+forms, and user forms save their non-sensitive fields in the current tab.
+Refreshing or navigating away and returning restores unfinished work. Filters,
+searches, selected budgets, history tabs, and expanded settings sections are also
+retained. Project-specific drafts stay within their account and project site;
+signing out or changing accounts clears that tab's saved work. Passwords and
+deletion selections are never stored. Ordinary form drafts last for the tab's
+session; this is not an offline submission queue.
+
+Restored record edits are checked against current server records. Changed
+records require review before saving; removed or replaced records cannot be
+saved from an old draft. Saving successfully or explicitly discarding clears
+the matching draft. Storage failures are shown on the page.
+Restoring work never submits, approves, deletes, or resets a password.
+Bulk approvals and inventory deletions stop when the sign-in changes, keeping
+unfinished IDs in the result instead of continuing under another account.
+
+New requests and manual item creations include a saved submission key. The
+backend records that key and the result in the same transaction, so retrying an
+unchanged submission after a refresh or interrupted response returns the saved
+record without duplicate stock usage or notifications. Reusing a key for changed
+details is rejected. Deploy the backend with the creation-receipt schema before
+deploying the frontend that relies on this retry protection.

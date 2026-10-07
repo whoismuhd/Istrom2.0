@@ -4,6 +4,8 @@ import { api } from '../api';
 import { AuthContext } from './authStore';
 import { disablePush } from '../push';
 import { isGlobalAdministrator, readProjectSelection, saveProjectSelection, validateProjectSelection } from '../utils/workspace';
+import { clearImportDraft, importDraftOwner } from '../utils/importDrafts';
+import { clearWorkspaceStates, workspaceOwner } from '../utils/workspaceState';
 
 function getStoredAuth() {
   // Retire the old shared login; each tab now signs in independently.
@@ -46,6 +48,8 @@ export function AuthProvider({ children }) {
       if (!['admin', 'project_site'].includes(identity?.user_type)) {
         throw new Error('Could not verify your sign-in. Please try again.');
       }
+      if (workspaceOwner(initialAuth.user) !== workspaceOwner(identity)) clearWorkspaceStates();
+      if (importDraftOwner(initialAuth.user) !== importDraftOwner(identity)) clearImportDraft().catch(() => {});
       let selection = readProjectSelection(identity);
       if (isGlobalAdministrator(identity) && selection) {
         const sites = await api.projectSites.list({ redirectOnUnauthorized: false });
@@ -61,6 +65,8 @@ export function AuthProvider({ children }) {
       if (!active || sessionStorage.getItem('istrom_token') !== startingToken) return;
       setUser(null);
       if (error.status === 401 || error.status === 403) {
+        clearWorkspaceStates();
+        clearImportDraft().catch(() => {});
         queryClient.clear();
         sessionStorage.removeItem('istrom_token');
         sessionStorage.removeItem('istrom_user');
@@ -80,12 +86,15 @@ export function AuthProvider({ children }) {
     setSessionAttempt((attempt) => attempt + 1);
   };
 
-  const setProjectSite = useCallback((site) => {
-    setProjectSiteState(saveProjectSelection(user, site));
+  const setProjectSite = useCallback((site, expectedCurrentSite) => {
+    setProjectSiteState((current) => expectedCurrentSite !== undefined && current !== expectedCurrentSite
+      ? current : saveProjectSelection(user, site));
   }, [user]);
 
   const acceptSession = (res) => {
     if (res.success && res.token) {
+      if (workspaceOwner(user) !== workspaceOwner(res.user)) clearWorkspaceStates();
+      if (importDraftOwner(user) !== importDraftOwner(res.user)) clearImportDraft().catch(() => {});
       queryClient.clear();
       sessionStorage.setItem('istrom_token', res.token);
       sessionStorage.setItem('istrom_user', JSON.stringify(res.user));
@@ -103,6 +112,8 @@ export function AuthProvider({ children }) {
   const changePassword = async (details) => acceptSession(await api.auth.changePassword(details));
 
   const clearSession = () => {
+    clearWorkspaceStates();
+    clearImportDraft().catch(() => {});
     queryClient.clear();
     sessionStorage.removeItem('istrom_token');
     sessionStorage.removeItem('istrom_user');

@@ -1,6 +1,6 @@
 """SQLAlchemy models for Istrom Inventory Management System."""
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Index
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from db import Base
 
@@ -66,6 +66,18 @@ class AdminPasswordReset(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
+
+
+class CreationReceipt(Base):
+    __tablename__ = 'creation_receipts'
+    __table_args__ = (UniqueConstraint('owner', 'operation', 'submission_key', name='ux_creation_receipt_intent'),)
+    id = Column(Integer, primary_key=True)
+    owner = Column(String(512), nullable=False)
+    operation = Column(String(30), nullable=False)
+    submission_key = Column(String(100), nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    record_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class Item(Base):

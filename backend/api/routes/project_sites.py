@@ -68,9 +68,19 @@ def update_project_site(
     user: dict = Depends(get_current_global_admin),
 ):
     lock_account_changes(db)
-    ps = db.query(ProjectSite).filter(ProjectSite.id == site_id).first()
+    ps = db.query(ProjectSite).filter(ProjectSite.id == site_id).populate_existing().first()
     if not ps:
         raise HTTPException(404, "Project site not found")
+    if not ps.is_active:
+        db.rollback()
+        raise HTTPException(409, "This project site is no longer active. Refresh before continuing.")
+    if data.expected is not None and (
+        ps.name != data.expected.name
+        or (ps.description or '') != (data.expected.description or '')
+        or ps.is_active != data.expected.is_active
+    ):
+        db.rollback()
+        raise HTTPException(409, "This project site changed. Review its current name and description before saving again.")
     lock_project_records(db, ps.name)
     old_name = ps.name
     if data.name is not None:

@@ -1,6 +1,6 @@
 import LoadError from '../components/LoadError';
 import { matchesBudget, plannedTotal, toCSV, scopeTotals, budgetNumberOptions, buildingTypeLabel, budgetBuildingTypes } from '../utils/budgets';
-import { useState } from 'react';
+import usePersistentState from '../hooks/usePersistentState';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatNaira } from '../api';
@@ -9,15 +9,14 @@ import { downloadBlob } from '../utils/downloads';
 
 const BUILDING_TYPES = ['Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
 
-function AccordionSection({ title, total, children, defaultOpen = false }) {
-  const [open, setOpen] = useState(defaultOpen);
+function AccordionSection({ title, total, children, open, onToggle }) {
   return (
     <div className={`budget-accordion-section${open ? ' open' : ''}`}>
       <button
         type="button"
         className={`budget-accordion-header${open ? ' open' : ''}`}
         aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        onClick={onToggle}
       >
         <span aria-hidden="true" className={`budget-accordion-chevron${open ? ' open' : ''}`}>{'>'}</span>
         <span className="budget-accordion-title">{title}</span>
@@ -30,7 +29,8 @@ function AccordionSection({ title, total, children, defaultOpen = false }) {
 
 export default function BudgetSummary() {
   const { getEffectiveProjectSite } = useAuth();
-  const [activeBudget, setActiveBudget] = useState('All');
+  const [activeBudget, setActiveBudget, , budgetStorageError] = usePersistentState('budget-summary-filter', 'All');
+  const [openSections, setOpenSections, , sectionStorageError] = usePersistentState('budget-summary-sections', []);
 
   const { data: items = [], error: itemsError, isLoading: itemsLoading, refetch: retryItems } = useQuery({
     queryKey: ['items', { project_site: getEffectiveProjectSite() }],
@@ -66,6 +66,7 @@ export default function BudgetSummary() {
 
   return (
     <div className="budget-summary-page">
+      {(budgetStorageError || sectionStorageError) && <div role="status" className="alert alert-warning">{budgetStorageError || sectionStorageError}</div>}
       <div className="card">
         <div className="budget-summary-header">
           <div>
@@ -85,6 +86,7 @@ export default function BudgetSummary() {
             onChange={(e) => setActiveBudget(e.target.value)}
           >
             <option value="All">All</option>
+            {activeBudget !== 'All' && !budgetNumberOptions(items).includes(activeBudget) && <option value={activeBudget}>{activeBudget} (unavailable)</option>}
             {budgetNumberOptions(items).map((b) => (
               <option key={b} value={b}>{b}</option>
             ))}
@@ -117,6 +119,11 @@ export default function BudgetSummary() {
                   key={buildingType}
                   title={buildingType}
                   total={formatNaira(total)}
+                  open={openSections.includes(`${activeBudget}::${buildingType}`)}
+                  onToggle={() => setOpenSections((previous) => {
+                    const name = `${activeBudget}::${buildingType}`;
+                    return previous.includes(name) ? previous.filter((entry) => entry !== name) : [...previous, name];
+                  })}
                 >
                   <div className="table-wrap">
                     <table className="budget-blocks-table">

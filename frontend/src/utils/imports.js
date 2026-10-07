@@ -69,3 +69,36 @@ export function mappingPayload(layouts, drafts) {
   return Object.fromEntries(layouts.filter((layout) => layout.is_manual || mappingChanged(layout, drafts[layout.sheet_name]))
     .map((layout) => [layout.sheet_name, drafts[layout.sheet_name]]));
 }
+
+function previewClaims(analysis) {
+  try {
+    const payload = analysis?.preview_token?.split('.')[1];
+    return JSON.parse(atob(payload.replaceAll('-', '+').replaceAll('_', '/')));
+  } catch {
+    return null;
+  }
+}
+
+// These claims only guide the interface; the server still verifies the signature.
+export function importPreviewExpiresAt(analysis) {
+  const exp = previewClaims(analysis)?.exp;
+  return Number.isFinite(exp) && exp > 0 ? exp * 1000 : 0;
+}
+
+export function sameImportPreviewSources(previous, next) {
+  const oldWorkbook = previewClaims(previous)?.workbook;
+  if (!oldWorkbook || oldWorkbook !== previewClaims(next)?.workbook) return false;
+  if (![previous, next].every((analysis) => Array.isArray(analysis?.sheets)
+    && analysis.sheets.every((sheet) => typeof sheet.sheet_name === 'string' && Array.isArray(sheet.items)))) return false;
+  const sources = (analysis) => analysis.sheets.map((sheet) => [sheet.sheet_name,
+    sheet.items.map(importRowKey).sort()]).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(sources(previous)) === JSON.stringify(sources(next));
+}
+
+export function importPreviewMappings(analysis) {
+  const layouts = analysis?.layouts || [];
+  return mappingPayload(layouts, Object.fromEntries(layouts.map((layout) => [layout.sheet_name, {
+    header_row: layout.header_row ?? 1, columns: layout.suggested_mapping,
+    skip: layout.status === 'skipped',
+  }])));
+}

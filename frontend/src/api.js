@@ -1,9 +1,13 @@
 import { parseApiDate } from './utils/dates.js';
+import { clearImportDraft } from './utils/importDrafts.js';
+import { clearWorkspaceStates } from './utils/workspaceState.js';
 /** API client for Istrom Inventory Management System */
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '/api').replace(/\/+$/, '');
 
 export function expireSession() {
+  clearWorkspaceStates();
+  clearImportDraft().catch(() => {});
   sessionStorage.removeItem('istrom_token');
   sessionStorage.removeItem('istrom_user');
   window.location.href = '/login';

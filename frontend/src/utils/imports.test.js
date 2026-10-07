@@ -1,6 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { numericImportValue, importRowIssues, importMappingIssues, importCategoryForGroup, mappingChanged, mappingPayload, importRowKey, sheetReconciliation } from './imports.js';
+import { numericImportValue, importRowIssues, importMappingIssues, importCategoryForGroup, mappingChanged, mappingPayload, importRowKey, sheetReconciliation, importPreviewExpiresAt, sameImportPreviewSources, importPreviewMappings } from './imports.js';
+
+const previewToken = (claims) => `header.${btoa(JSON.stringify(claims))}.signature`;
+
+test('Saved previews use the token expiry without treating client claims as server authorization', () => {
+  assert.equal(importPreviewExpiresAt({ preview_token: previewToken({ exp: 1234 }) }), 1234000);
+  for (const analysis of [null, {}, { preview_token: 'invalid' }, { preview_token: previewToken({ exp: '1234' }) }]) {
+    assert.equal(importPreviewExpiresAt(analysis), 0);
+  }
+});
+
+test('Refreshing a saved preview preserves edits only for the same workbook and source rows', () => {
+  const previous = { preview_token: previewToken({ workbook: 'same-file', exp: 1000 }), sheets: [
+    { sheet_name: 'Budget A', items: [{ sheet_name: 'Source', row_number: 3 }, { sheet_name: 'Source', row_number: 4 }] },
+    { sheet_name: 'Budget B', items: [{ sheet_name: 'Source', row_number: 7 }] },
+  ] };
+  const next = { ...previous, preview_token: previewToken({ workbook: 'same-file', exp: 2000 }), sheets: [...previous.sheets].reverse() };
+  assert.equal(sameImportPreviewSources(previous, next), true);
+  assert.equal(sameImportPreviewSources(previous, { ...next, preview_token: previewToken({ workbook: 'different-file' }) }), false);
+  assert.equal(sameImportPreviewSources(previous, { ...next, sheets: [previous.sheets[0]] }), false);
+  assert.equal(sameImportPreviewSources(previous, { ...next, sheets: [{ ...previous.sheets[0], items: [{ sheet_name: 'Source', row_number: 8 }] }, previous.sheets[1]] }), false);
+  assert.equal(sameImportPreviewSources({ ...previous, file_name: 'original.xlsx' }, { ...next, file_name: 'renamed.xlsx' }), true);
+  assert.equal(sameImportPreviewSources(previous, { ...next, file_name: 'original.xlsx',
+    preview_token: previewToken({ workbook: 'different-file' }) }), false);
+});
+
+test('Workbook recovery uses reviewed mappings, including headerless and manually excluded sheets', () => {
+  const layouts = [
+    { sheet_name: 'Detected', status: 'ready', header_row: 3, is_manual: false,
+      suggested_mapping: { name: 0, qty: 1, unit_cost: 3 } },
+    { sheet_name: 'Headerless', status: 'ready', header_row: 0, is_manual: true,
+      suggested_mapping: { name: 1, amount: 4 } },
+    { sheet_name: 'Excluded', status: 'skipped', header_row: null, is_manual: true,
+      suggested_mapping: {} },
+  ];
+  assert.deepEqual(importPreviewMappings({ layouts }), {
+    Headerless: { header_row: 0, columns: { name: 1, amount: 4 }, skip: false },
+    Excluded: { header_row: 1, columns: {}, skip: true },
+  });
+  assert.deepEqual(importPreviewMappings(null), {});
+  assert.equal(layouts[1].header_row, 0);
+});
 
 test('Mapping supports priced quantities or line amounts and rejects ambiguous selections', () => {
   assert.deepEqual(importMappingIssues({ name: 0, qty: 2, unit_cost: 4 }), []);

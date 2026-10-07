@@ -53,6 +53,7 @@ def validate_password(value: str) -> str:
 
 UsernameText = Annotated[str, Field(max_length=80), AfterValidator(validate_username)]
 PasswordText = Annotated[str, Field(max_length=128), AfterValidator(validate_password)]
+SubmissionKey = Annotated[str, Field(min_length=16, max_length=100, pattern=r'^[A-Za-z0-9_-]+$')]
 
 
 class AdminSetupRequest(BaseModel):
@@ -76,8 +77,15 @@ class UserCreate(UserDetails):
         return self
 
 
+class UserEditBaseline(BaseModel):
+    user_type: Literal['admin', 'project_site']
+    project_site: Optional[str] = Field(default=None, max_length=255)
+    is_active: bool
+
+
 class UserUpdate(UserDetails):
     is_active: bool
+    expected: Optional[UserEditBaseline] = None
 
 
 class PasswordReset(BaseModel):
@@ -133,6 +141,7 @@ class UserOut(BaseModel):
 
 
 class ItemCreate(BaseModel):
+    submission_key: Optional[SubmissionKey] = None
     name: str = Field(min_length=1, max_length=255)
     qty: float = Field(default=0, ge=0)
     unit: str = Field(default='pcs', min_length=1, max_length=50)
@@ -154,7 +163,11 @@ class ItemCreate(BaseModel):
 
 
 class ItemUpdate(BaseModel):
+    expected_created_at: Optional[datetime] = None
     expected_qty: Optional[float] = None
+    expected_unit_cost: Optional[float] = Field(default=None, ge=0)
+    expected_planned_qty: Optional[float] = Field(default=None, ge=0)
+    expected_planned_unit_cost: Optional[float] = Field(default=None, ge=0)
     qty: Optional[float] = None
     unit_cost: Optional[float] = Field(default=None, ge=0)
     planned_qty: Optional[float] = Field(default=None, ge=0)
@@ -186,6 +199,8 @@ class ItemOut(BaseModel):
 
 
 class RequestCreate(BaseModel):
+    submission_key: Optional[SubmissionKey] = None
+    expected_item_created_at: Optional[datetime] = None
     item_id: int
     qty: float = Field(gt=0)
     requested_by: Optional[str] = None
@@ -263,9 +278,16 @@ class ProjectSiteCreate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=2000)
 
 
+class ProjectSiteEditBaseline(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    is_active: bool
+
+
 class ProjectSiteUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = Field(default=None, max_length=2000)
+    expected: Optional[ProjectSiteEditBaseline] = None
 
 
 class ProjectSiteOut(BaseModel):

@@ -71,6 +71,13 @@ def update_user(user_id: int, data: UserUpdate, background_tasks: BackgroundTask
                 db: Session = Depends(get_db), admin: dict = Depends(get_current_global_admin)):
     lock_account_changes(db)
     account = _account(db, user_id)
+    if data.expected is not None and (
+        account.user_type != data.expected.user_type
+        or account.project_site != data.expected.project_site
+        or account.is_active != data.expected.is_active
+    ):
+        db.rollback()
+        raise HTTPException(409, 'This user changed. Review the current assignment and status before saving again.')
     if data.user_type != account.user_type:
         raise HTTPException(409, 'Account roles are fixed. Site users cannot become the administrator.')
     site = _site(db, data.user_type, data.project_site, allow_inactive=(not data.is_active and data.project_site == account.project_site))
