@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/useAuth';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 import useNotificationSocket from '../hooks/useNotificationSocket';
 import Logo from './Logo';
+import ThemeToggle from './ThemeToggle';
 import './Layout.css';
 
 const Icons = {
@@ -68,6 +69,7 @@ const Icons = {
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
     </svg>
   ),
+  users: <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87" /><circle cx="9" cy="7" r="4" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>,
   bell: (
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -103,38 +105,24 @@ const Icons = {
 };
 
 const ADMIN_TABS = [
-  { path: '/dashboard', label: 'Control Tower', icon: 'dashboard' },
-  { path: '/manual-entry', label: 'Manual Entry', icon: 'entry' },
-  { path: '/bulk-upload', label: 'Import Workbook', icon: 'upload' },
+  { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { path: '/manual-entry', label: 'Add items', icon: 'entry' },
+  { path: '/bulk-upload', label: 'Import workbook', icon: 'upload' },
   { path: '/inventory', label: 'Inventory', icon: 'inventory' },
-  { path: '/request', label: 'Make Request', icon: 'request' },
-  { path: '/review', label: 'Review & History', icon: 'review' },
-  { path: '/budget-summary', label: 'Budget Summary', icon: 'budget' },
+  { path: '/review', label: 'Request approvals', icon: 'review' },
+  { path: '/budget-summary', label: 'Budget summary', icon: 'budget' },
   { path: '/actuals', label: 'Actuals', icon: 'actuals' },
   { path: '/notifications', label: 'Notifications', icon: 'bell' },
-  { path: '/settings', label: 'Admin Settings', icon: 'settings' },
-];
-
-const SITE_ADMIN_TABS = [
-  { path: '/dashboard', label: 'Site Hub', icon: 'dashboard' },
-  // { path: '/bulk-upload', label: 'Excel Viewer', icon: 'upload' },
-  { path: '/manual-entry', label: 'Manual Entry', icon: 'entry' },
-  { path: '/inventory', label: 'Inventory', icon: 'inventory' },
-  { path: '/request', label: 'Make Request', icon: 'request' },
-  { path: '/review', label: 'Review & History', icon: 'review' },
-  { path: '/budget-summary', label: 'Budget Summary', icon: 'budget' },
-  { path: '/actuals', label: 'Actuals', icon: 'actuals' },
-  { path: '/notifications', label: 'Notifications', icon: 'bell' },
+  { path: '/settings', label: 'Settings', icon: 'settings' },
+  { path: '/users', label: 'Users', icon: 'users' },
 ];
 
 const PROJECT_TABS = [
-  { path: '/dashboard', label: 'Site Hub', icon: 'dashboard' },
-  // { path: '/bulk-upload', label: 'Excel Viewer', icon: 'upload' },
-  { path: '/manual-entry', label: 'Manual Entry', icon: 'entry' },
+  { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
   { path: '/inventory', label: 'Inventory', icon: 'inventory' },
-  { path: '/request', label: 'Make Request', icon: 'request' },
-  { path: '/review', label: 'Review & History', icon: 'review' },
-  { path: '/budget-summary', label: 'Budget Summary', icon: 'budget' },
+  { path: '/request', label: 'New request', icon: 'request' },
+  { path: '/review', label: 'Site requests', icon: 'review' },
+  { path: '/budget-summary', label: 'Budget summary', icon: 'budget' },
   { path: '/actuals', label: 'Actuals', icon: 'actuals' },
   { path: '/notifications', label: 'Notifications', icon: 'bell' },
 ];
@@ -159,39 +147,57 @@ export default function Layout() {
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 
-  const tabs = isGlobalAdmin ? ADMIN_TABS : (isAdmin ? SITE_ADMIN_TABS : PROJECT_TABS);
-  const displayName = user?.full_name || user?.username || 'User';
+  const tabs = isAdmin ? ADMIN_TABS.filter((tab) => isGlobalAdmin || !['/users', '/settings'].includes(tab.path)) : PROJECT_TABS;
+  const displayName = user?.username || 'User';
   const displayProject = isGlobalAdmin ? (projectSite || 'All Sites') : (user?.project_site || '—');
-  const roleLabel = isGlobalAdmin ? 'Admin' : (isAdmin ? 'Site Admin' : 'Site');
-  const roleClass = isGlobalAdmin ? 'role-global-admin' : (isAdmin ? 'role-site-admin' : 'role-project-site');
-  const headerTagline = isGlobalAdmin ? 'Control Tower' : (isAdmin ? 'Site Operations' : 'Field Operations');
+  const roleLabel = isAdmin ? 'Administrator' : 'Site user';
+  const workspaceLabel = isAdmin ? 'Administration' : 'Project site';
+  const roleClass = isAdmin ? 'role-global-admin' : 'role-project-site';
+  const groups = [
+    { label: 'Workspace', paths: ['/dashboard', '/inventory', '/manual-entry', '/bulk-upload'] },
+    { label: isAdmin ? 'Approvals' : 'Requests', paths: ['/request', '/review'] },
+    { label: 'Reports', paths: ['/budget-summary', '/actuals'] },
+    { label: 'Updates', paths: ['/notifications'] },
+    { label: 'Administration', paths: ['/users', '/settings'] },
+  ].filter((group) => tabs.some((tab) => group.paths.includes(tab.path)));
+
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+    const closeOnEscape = (event) => { if (event.key === 'Escape') setSidebarOpen(false); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [sidebarOpen]);
 
   return (
     <div className={`app-layout ${roleClass}`}>
-      {/* ── Top Header ── */}
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <header className="app-header">
         <button
           className="hamburger-btn"
           onClick={() => setSidebarOpen((o) => !o)}
           aria-label="Toggle menu"
+          aria-expanded={sidebarOpen}
+          aria-controls="app-sidebar"
         >
           {sidebarOpen ? Icons.close : Icons.menu}
         </button>
 
         <div className="header-brand">
           <Logo className="header-logo" />
-          <span className="header-tagline">{headerTagline}</span>
+          <span className="header-tagline">{workspaceLabel}</span>
         </div>
 
         {isGlobalAdmin && (
           <div className="header-site-selector">
-            {Icons.pin}
+            <label htmlFor="project-site-scope">Project site</label>
             <select
+              id="project-site-scope"
+              aria-label="Project site"
               value={projectSite ?? ''}
               onChange={(e) => setProjectSite(e.target.value || null)}
               className="site-select-header"
@@ -204,24 +210,27 @@ export default function Layout() {
           </div>
         )}
 
+        {!isGlobalAdmin && <div className="header-site-name">{displayProject}</div>}
         <div className="header-actions">
-          {unreadCount > 0 && (
+          <ThemeToggle />
+          {(
             <button
               className="notif-icon-btn"
               onClick={() => navigate('/notifications')}
-              aria-label={`${unreadCount} unread notifications`}
+              aria-label={unreadCount > 0 ? `${unreadCount} unread notifications` : 'Notifications'}
             >
               {Icons.bell}
-              <span className="notif-pip">{unreadCount > 9 ? '9+' : unreadCount}</span>
+              {unreadCount > 0 && <span className="notif-pip">{unreadCount > 9 ? '9+' : unreadCount}</span>}
             </button>
           )}
           <div className="user-chip">
             <span className="user-chip-role">{roleLabel}</span>
             <span className="user-chip-name">{displayName}</span>
           </div>
-          <button className="btn-header-logout" onClick={handleLogout}>
+          <NavLink to="/change-password" className="btn-header-logout" aria-label="Change password" title="Change password">{Icons.settings}<span className="logout-label">Password</span></NavLink>
+          <button className="btn-header-logout" aria-label="Sign out" onClick={handleLogout}>
             {Icons.logout}
-            <span className="logout-label">Logout</span>
+            <span className="logout-label">Sign out</span>
           </button>
         </div>
       </header>
@@ -236,14 +245,17 @@ export default function Layout() {
       )}
 
       {/* ── Sidebar ── */}
-      <aside className={`app-sidebar${sidebarOpen ? ' sidebar-open' : ''}`}>
+      <aside id="app-sidebar" className={`app-sidebar${sidebarOpen ? ' sidebar-open' : ''}`}>
+        <div className="sidebar-brand"><Logo /><span>{workspaceLabel}</span></div>
         <div className="sidebar-site-block">
-          <span className="sidebar-site-label">{isGlobalAdmin ? 'Monitoring Scope' : 'Active Site'}</span>
+          <span className="sidebar-site-label">{isGlobalAdmin ? 'Current scope' : 'Project site'}</span>
           <span className="sidebar-site-name">{displayProject}</span>
         </div>
 
-        <nav className="sidebar-nav">
-          {tabs.map((tab) => (
+        <nav className="sidebar-nav" aria-label="Main navigation">
+          {groups.map((group) => <div className="sidebar-group" key={group.label}>
+            <span className="sidebar-group-label">{group.label}</span>
+            {tabs.filter((tab) => group.paths.includes(tab.path)).map((tab) => (
             <NavLink
               key={tab.path}
               to={tab.path}
@@ -258,7 +270,8 @@ export default function Layout() {
                 </span>
               )}
             </NavLink>
-          ))}
+            ))}
+          </div>)}
         </nav>
 
         <div className="sidebar-footer">
@@ -268,16 +281,16 @@ export default function Layout() {
           <div className="sidebar-footer-info">
             <span className="sidebar-footer-name">{displayName}</span>
             <span className="sidebar-footer-role">
-              {isGlobalAdmin ? 'Administrator' : displayProject}
+              {roleLabel}
             </span>
           </div>
         </div>
       </aside>
 
       {/* ── Main Content ── */}
-      <main className="app-main">
+      <main className="app-main" id="main-content">
         <div className="page-shell">
-          <Outlet />
+          <Outlet key={isGlobalAdmin ? (projectSite || 'all-sites') : user?.project_site} />
         </div>
       </main>
     </div>

@@ -1,11 +1,12 @@
 """Notifications routes."""
 import re
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from db import get_db
-from models import Notification, Request, Item, DeletedRequest
+from models import Notification, NotificationRead, Request, Item, DeletedRequest
 from api.schemas import NotificationOut
 from api.dependencies import (
     get_current_user,
@@ -89,6 +90,8 @@ def _enrich_from_request(db: Session, n, item_name, qty, budget, building_subtyp
 
 
 def _can_access_notification(user: dict, notification: Notification) -> bool:
+    if user.get('user_type') == 'admin' and notification.notification_type == 'request_submitted':
+        return False
     if is_global_admin_user(user):
         return True
     user_site = user.get("project_site")
@@ -103,10 +106,11 @@ def _can_access_notification(user: dict, notification: Notification) -> bool:
 
 @router.get("", response_model=List[NotificationOut])
 def list_notifications(
+    project_site: Optional[str] = None,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    effective_site = enforce_project_site_scope(user, None)
+    effective_site = enforce_project_site_scope(user, project_site)
     q = db.query(Notification)
     is_admin = user.get("user_type") == "admin"
     if effective_site:
@@ -117,6 +121,13 @@ def list_notifications(
         # request_submitted is requester-facing; admins should use new_request to review incoming work.
         q = q.filter(Notification.notification_type != "request_submitted")
     rows = q.order_by(Notification.created_at.desc()).limit(100).all()
+    user_id = user.get('user_id')
+    read_ids = set()
+    if user_id and rows:
+        read_ids = {row.notification_id for row in db.query(NotificationRead).filter(
+            NotificationRead.user_id == user_id,
+            NotificationRead.notification_id.in_([n.id for n in rows]),
+        ).all()}
 
     out = []
     for n in rows:
@@ -178,6 +189,10 @@ def list_notifications(
                 iname = item_name or "item"
                 q = qty if qty is not None else "?"
                 message = f"Request for {iname} x {q} by {requested_by} was {action}."
+                if n.notification_type == "request_approved":
+                    _, marker, shortage_detail = (n.message or "").partition(" Approved over quantity: ")
+                    if marker:
+                        message += marker + shortage_detail
             elif (n.message or "").startswith("Your request"):
                 message = (n.message or "").replace("Your request for", "Request for", 1)
 
@@ -190,7 +205,7 @@ def list_notifications(
             qty=qty,
             budget=budget,
             building_subtype=building_subtype,
-            is_read=n.is_read,
+            is_read=n.id in read_ids if user_id else n.is_read,
             created_at=n.created_at,
         ))
     return out
@@ -208,14 +223,21 @@ def mark_read(
         raise HTTPException(404, "Notification not found")
     if not _can_access_notification(user, n):
         raise HTTPException(403, "Access denied")
-    n.is_read = True
-    db.commit()
-    background_tasks.add_task(
-        notification_hub.broadcast_notification_updated,
-        n.id,
-        n.notification_type,
-        n.project_site,
-    )
+    user_id = user.get('user_id')
+    if user_id:
+        if not db.get(NotificationRead, (n.id, user_id)):
+            db.add(NotificationRead(notification_id=n.id, user_id=user_id))
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                if not db.get(NotificationRead, (notif_id, user_id)):
+                    raise
+        background_tasks.add_task(notification_hub.broadcast_notification_read, n.id, user_id)
+    else:
+        n.is_read = True
+        db.commit()
+        background_tasks.add_task(notification_hub.broadcast_notification_updated, n.id, n.notification_type, n.project_site)
     return {"ok": True}
 
 
@@ -225,6 +247,7 @@ def clear_all_notifications(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_global_admin),
 ):
+    db.query(NotificationRead).delete(synchronize_session=False)
     db.query(Notification).delete()
     db.commit()
     background_tasks.add_task(notification_hub.broadcast_notifications_cleared)
@@ -243,6 +266,7 @@ def delete_notification(
         n_id = n.id
         n_type = n.notification_type
         n_site = n.project_site
+        db.query(NotificationRead).filter(NotificationRead.notification_id == n_id).delete(synchronize_session=False)
         db.delete(n)
         db.commit()
         background_tasks.add_task(

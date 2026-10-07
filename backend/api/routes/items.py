@@ -1,12 +1,14 @@
 """Items routes."""
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import exists
 
 from db import get_db
 from models import Item, Request, Actual
 from api.schemas import ItemCreate, ItemUpdate, ItemOut
-from api.dependencies import get_current_user, get_current_admin, enforce_project_site_scope
+from api.dependencies import get_current_user, get_current_admin, enforce_project_site_scope, enforce_record_scope, require_active_project_site
+from api.services.notification_hub import notification_hub
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -44,29 +46,27 @@ def get_item(item_id: int, db: Session = Depends(get_db), user: dict = Depends(g
     item = db.query(Item).filter(Item.id == item_id).first()
     if not item:
         raise HTTPException(404, "Item not found")
-    enforce_project_site_scope(user, item.project_site)
+    enforce_record_scope(user, item.project_site)
     return item
 
 
 @router.post("", response_model=ItemOut)
 def create_item(
     data: ItemCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_admin),
 ):
-    requested_site = data.project_site or user.get("project_site") or "Lifecamp Kafe"
-    effective_site = enforce_project_site_scope(user, requested_site)
-    project_site = effective_site or "Lifecamp Kafe"
-    last_item = db.query(Item.id).order_by(Item.id.desc()).first()
-    next_num = (last_item[0] if last_item else 0) + 1
-    code = f"IT-{next_num}"
+    requested_site = data.project_site or user.get("project_site")
+    project_site = require_active_project_site(db, user, requested_site)
     item = Item(
-        code=code,
         name=data.name,
         category=data.category,
         unit=data.unit,
         qty=data.qty,
         unit_cost=data.unit_cost,
+        planned_qty=data.qty,
+        planned_unit_cost=data.unit_cost,
         budget=data.budget,
         section=data.section,
         grp=data.grp,
@@ -74,8 +74,11 @@ def create_item(
         project_site=project_site,
     )
     db.add(item)
+    db.flush()
+    item.code = f"IT-{item.id}"
     db.commit()
     db.refresh(item)
+    background_tasks.add_task(notification_hub.broadcast_workspace_changed, item.project_site)
     return item
 
 
@@ -83,32 +86,50 @@ def create_item(
 def update_item(
     item_id: int,
     data: ItemUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_admin),
 ):
     item = db.query(Item).filter(Item.id == item_id).first()
     if not item:
         raise HTTPException(404, "Item not found")
-    enforce_project_site_scope(user, item.project_site)
+    enforce_record_scope(user, item.project_site)
+    if data.expected_qty is not None:
+        changes = data.model_dump(exclude_none=True, exclude={"expected_qty"})
+        if changes:
+            updated = db.query(Item).filter(Item.id == item.id, Item.qty == data.expected_qty).update(changes, synchronize_session="fetch")
+            if not updated:
+                db.rollback()
+                raise HTTPException(409, "Availability changed while you were editing. Refresh Actuals and try again.")
+            db.commit()
+            db.refresh(item)
+            background_tasks.add_task(notification_hub.broadcast_workspace_changed, item.project_site)
+        return item
     if data.qty is not None:
         item.qty = data.qty
     if data.unit_cost is not None:
         item.unit_cost = data.unit_cost
+    if data.planned_qty is not None:
+        item.planned_qty = data.planned_qty
+    if data.planned_unit_cost is not None:
+        item.planned_unit_cost = data.planned_unit_cost
     db.commit()
     db.refresh(item)
+    background_tasks.add_task(notification_hub.broadcast_workspace_changed, item.project_site)
     return item
 
 
 @router.delete("/{item_id}")
 def delete_item(
     item_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_admin),
 ):
     item = db.query(Item).filter(Item.id == item_id).first()
     if not item:
         raise HTTPException(404, "Item not found")
-    enforce_project_site_scope(user, item.project_site)
+    enforce_record_scope(user, item.project_site)
     has_requests = db.query(Request.id).filter(Request.item_id == item_id).first()
     has_actuals = db.query(Actual.id).filter(Actual.item_id == item_id).first()
     if has_requests or has_actuals:
@@ -116,6 +137,15 @@ def delete_item(
             status_code=409,
             detail="Cannot delete item because it is linked to requests or actuals.",
         )
-    db.delete(item)
+    site = item.project_site
+    removed = db.query(Item).filter(
+        Item.id == item_id,
+        ~exists().where(Request.item_id == item_id),
+        ~exists().where(Actual.item_id == item_id),
+    ).delete(synchronize_session=False)
+    if not removed:
+        db.rollback()
+        raise HTTPException(409, 'This item changed or was linked to a request or actual. Refresh and try again.')
     db.commit()
+    background_tasks.add_task(notification_hub.broadcast_workspace_changed, site)
     return {"ok": True}

@@ -14,7 +14,7 @@
 .budget-summary-caption {
   margin: 0.25rem 0 0;
   max-width: 54ch;
-  color: #66778e;
+  color: var(--text-muted);
   font-size: 0.92rem;
 }
 
@@ -26,16 +26,16 @@
   margin-bottom: 1.15rem;
   padding: 0.78rem 0.88rem;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(79, 92, 112, 0.21);
-  background: #ffffff;
+  border: 1px solid var(--line);
+  background: var(--panel);
 }
 
 .budget-available-title {
   font-size: 0.73rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #58697c;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
   margin: 0;
 }
 
@@ -43,19 +43,19 @@
   min-height: 40px;
   min-width: 160px;
   padding: 0.4rem 0.78rem;
-  border: 1px solid rgba(79, 92, 112, 0.28);
-  background: #ffffff;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 6px;
   font-size: 0.83rem;
-  font-weight: 700;
-  color: #203040;
+  font-weight: 600;
+  color: var(--text-strong);
   cursor: pointer;
 }
 
 .budget-dropdown:focus {
   outline: none;
-  border-color: rgba(234, 88, 12, 0.72);
-  box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.15);
+  border-color: var(--focus-border);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .budget-detail-section {
@@ -65,7 +65,7 @@
 .budget-detail-title {
   margin: 0 0 0.7rem;
   font-size: 1.16rem;
-  color: #1f2b39;
+  color: var(--text-strong);
 }
 
 .budget-total-amount {
@@ -75,16 +75,16 @@
   gap: 0.35rem;
   padding: 0.88rem 0.95rem;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(79, 92, 112, 0.22);
-  background: linear-gradient(125deg, rgba(245, 158, 11, 0.16) 0%, rgba(234, 88, 12, 0.13) 100%);
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
 }
 
 .budget-total-label {
   font-size: 0.74rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #7d4a00;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--warning-text);
   display: flex;
   align-items: center;
   gap: 0.35rem;
@@ -92,8 +92,8 @@
 
 .budget-total-value {
   font-size: clamp(1.24rem, 3vw, 1.72rem);
-  font-weight: 700;
-  color: #2b3748;
+  font-weight: 600;
+  color: var(--text-strong);
 }
 
 .budget-kpi-grid {
@@ -104,9 +104,9 @@
 }
 
 .budget-kpi-card {
-  border-radius: 12px;
-  border: 1px solid rgba(79, 92, 112, 0.2);
-  background: #ffffff;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
   padding: 0.74rem 0.82rem;
   box-shadow: var(--shadow-soft);
 }
@@ -114,39 +114,39 @@
 .budget-kpi-label {
   display: block;
   font-size: 0.69rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 800;
-  color: #5f6f84;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 
 .budget-kpi-value {
   margin-top: 0.28rem;
   display: block;
   font-size: 1rem;
-  font-weight: 800;
-  color: #253447;
+  font-weight: 600;
+  color: var(--text-strong);
 }
 
 .budget-breakdown-title {
   margin: 0 0 0.62rem;
   font-size: 0.82rem;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  font-weight: 800;
-  color: #59697d;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 
 .budget-note {
   margin: 0.95rem 0 0;
   font-size: 0.82rem;
-  color: #5e6f84;
+  color: var(--text-muted);
   display: flex;
   align-items: center;
   gap: 0.46rem;
-  border-radius: 11px;
-  border: 1px dashed rgba(79, 92, 112, 0.32);
-  background: #f9fbfe;
+  border-radius: 6px;
+  border: 1px dashed var(--line);
+  background: var(--panel-soft);
   padding: 0.75rem 0.85rem;
 }
 
@@ -157,16 +157,16 @@
   justify-content: center;
   width: 18px;
   height: 18px;
-  background: rgba(245, 158, 11, 0.2);
-  color: #8e5700;
+  background: var(--warning-border);
+  color: var(--warning-text);
   border-radius: 50%;
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .budget-info-icon {
   font-size: 0.75rem;
-  color: #7d4a00;
+  color: var(--warning-text);
   cursor: help;
 }
 
@@ -177,15 +177,15 @@
 }
 
 .budget-accordion-section {
-  background: #ffffff;
-  border: 1px solid rgba(79, 92, 112, 0.22);
-  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
   overflow: hidden;
   box-shadow: var(--shadow-soft);
 }
 
 .budget-accordion-section.open {
-  border-color: rgba(245, 158, 11, 0.35);
+  border-color: var(--warning-border);
 }
 
 .budget-accordion-header {
@@ -194,27 +194,27 @@
   align-items: center;
   gap: 0.48rem;
   padding: 0.82rem 0.96rem;
-  background: #ffffff;
+  background: var(--panel);
   border: none;
   font-size: 0.9rem;
-  font-weight: 700;
+  font-weight: 600;
   text-align: left;
   cursor: pointer;
   transition: background 180ms ease;
-  color: #1f2e40;
+  color: var(--text-strong);
 }
 
 .budget-accordion-header:hover {
-  background: #eef4fa;
+  background: var(--panel-hover);
 }
 
 .budget-accordion-header.open {
-  background: linear-gradient(120deg, rgba(245, 158, 11, 0.16) 0%, rgba(234, 88, 12, 0.12) 100%);
+  background: var(--panel-soft);
 }
 
 .budget-accordion-chevron {
   font-size: 0.78rem;
-  color: #6a778b;
+  color: var(--text-muted);
   transition: transform 180ms ease;
 }
 
@@ -232,16 +232,16 @@
 .budget-accordion-total {
   margin-left: auto;
   font-size: 0.73rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 800;
-  color: #5d6d82;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 
 .budget-accordion-body {
   padding: 0.88rem;
-  border-top: 1px solid rgba(79, 92, 112, 0.2);
-  background: #fbfcfd;
+  border-top: 1px solid var(--line);
+  background: var(--panel-soft);
 }
 
 .budget-blocks-table {
@@ -255,30 +255,30 @@
 .budget-blocks-table td {
   padding: 0.55rem 0.72rem;
   text-align: left;
-  border-bottom: 1px solid rgba(79, 92, 112, 0.14);
+  border-bottom: 1px solid var(--line);
 }
 
 .budget-blocks-table th {
   font-size: 0.67rem;
-  font-weight: 800;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: #67758b;
-  background: #eff4f9;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+  background: var(--panel-soft);
   white-space: nowrap;
 }
 
 .budget-blocks-table td {
   font-size: 0.82rem;
-  color: #243244;
+  color: var(--text-strong);
 }
 
 .budget-blocks-table tbody tr:nth-child(even) td {
-  background: #fbfdff;
+  background: var(--panel-soft);
 }
 
 .budget-blocks-table tbody tr:hover td {
-  background: #fff8eb;
+  background: var(--panel-soft);
 }
 
 .budget-blocks-table tbody tr:last-child td {
@@ -287,13 +287,13 @@
 
 .budget-section-footer {
   margin: 0.85rem 0 0;
-  border-radius: 10px;
-  border: 1px solid rgba(79, 92, 112, 0.18);
-  background: #ffffff;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
   padding: 0.62rem 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
   font-size: 0.83rem;
-  color: #425267;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 740px) {
@@ -311,3 +311,12 @@
     grid-template-columns: 1fr;
   }
 }
+
+.budget-summary-caption { font-size: 13px; margin-top: 7px; }
+.budget-total-label, .budget-kpi-label { font-size: 12px; color: var(--text-muted); font-weight: 400; }
+.budget-total-value, .budget-kpi-value { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.budget-accordion-total { letter-spacing: 0; font-size: 12px; }
+.budget-breakdown-title { font-size: 15px; }
+.budget-blocks-table th { font-size: 11px; font-weight: 500; background: var(--panel-soft); }
+.budget-blocks-table th:nth-child(n+2), .budget-blocks-table td:nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
+.budget-note { border-style: solid; }

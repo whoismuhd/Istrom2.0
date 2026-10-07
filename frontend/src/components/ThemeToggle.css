@@ -1,0 +1,6 @@
+.theme-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text-secondary); font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+.theme-toggle:hover { background: var(--panel-hover); }
+.theme-toggle svg { flex-shrink: 0; }
+.login-theme-toggle { position: absolute; top: 24px; right: 24px; }
+@media (max-width: 1100px) { .app-header .theme-toggle { width: 36px; padding: 0; } .app-header .theme-toggle-label { display: none; } }
+@media (max-width: 640px) { .login-theme-toggle { top: 20px; right: 20px; } }

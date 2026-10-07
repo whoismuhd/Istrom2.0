@@ -1,22 +1,18 @@
+import { useCallback } from 'react';
+import ErrorMessage from '../components/ErrorMessage';
+import EmptyState from '../components/EmptyState';
+import Modal from '../components/Modal';
+import { formatQuantity, summarizeActuals } from '../utils/inventory.js';
+import LoadError from '../components/LoadError';
+import { matchesBudget, plannedQuantity, plannedUnitCost, plannedAmount, budgetPosition, toCSV, budgetNumberOptions } from '../utils/budgets';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatNaira } from '../api';
 import './Actuals.css';
+import { actualBuildingSubtypes } from '../utils/buildings';
 
 const PROPERTY_TYPES = ['', 'All', 'Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
-
-const BUILDING_SUBTYPE_OPTIONS = {
-  Flats: ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13'],
-  Terraces: [
-    'A (T1-T6)', 'B (T7-T12)', 'C (T13-T18)', 'D (T19-T24)', 'E (T25-T30)', 'F (T31-T36)',
-    'G (T37-T42)', 'H (T43-T48)', 'I (T49-T53)', 'J (T54-T58)', 'K (T59-T64)', 'L (T65-T70)',
-    'M (T71-T76)', 'N (T77-T82)', 'O (T83-T88)', 'P (T89-T94)', 'Q (T95-T100)', 'R (T101-T106)',
-    'S (T107-T112)', 'T (T113-T118)', 'U (T119-T124)', 'V (T125-T130)', 'W (T131-T136)', 'X (T137-T142)',
-  ],
-  'Semi-detached': Array.from({ length: 29 }, (_, i) => `SD ${i + 1}`),
-  'Fully-detached': Array.from({ length: 52 }, (_, i) => `D${i + 1}`),
-};
 
 const BUILDING_SUBTYPE_LABELS = {
   Flats: 'Select Block',
@@ -26,7 +22,23 @@ const BUILDING_SUBTYPE_LABELS = {
 };
 
 export default function Actuals() {
-  const { getEffectiveProjectSite } = useAuth();
+  const { isAdmin, getEffectiveProjectSite } = useAuth();
+  const queryClient = useQueryClient();
+  const [adjustItem, setAdjustItem] = useState(null);
+  const [adjustQty, setAdjustQty] = useState('');
+  const [adjustOver, setAdjustOver] = useState(false);
+  const [adjustCost, setAdjustCost] = useState('');
+  const closeAdjustment = useCallback(() => setAdjustItem(null), []);
+  const adjustment = useMutation({
+    mutationFn: ({ id, data }) => api.items.update(id, data),
+    onError: () => {
+      for (const key of ['items', 'requests', 'actuals', 'dashboard']) queryClient.invalidateQueries({ queryKey: [key] });
+    },
+    onSuccess: () => {
+      for (const key of ['items', 'requests', 'actuals', 'dashboard']) queryClient.invalidateQueries({ queryKey: [key] });
+      closeAdjustment();
+    },
+  });
 
   const [budgetNum, setBudgetNum] = useState('');
   const [buildingType, setBuildingType] = useState('');
@@ -35,18 +47,22 @@ export default function Actuals() {
   const ps = getEffectiveProjectSite();
   if (ps) params.project_site = ps;
 
-  const { data: items = [] } = useQuery({
+  const { data: items = [], error: itemsError, isLoading: itemsLoading, refetch: retryItems } = useQuery({
     queryKey: ['items', params],
     queryFn: () => api.items.list(params),
   });
 
-  const { data: actuals = [] } = useQuery({
+  const { data: actuals = [], error: actualsError, isLoading: actualsLoading, refetch: retryActuals } = useQuery({
     queryKey: ['actuals', params],
     queryFn: () => api.actuals.list(params),
   });
 
+  const loadError = itemsError || actualsError;
+  if (loadError) return <LoadError error={loadError} onRetry={() => { retryItems(); retryActuals(); }} />;
+  if (itemsLoading || actualsLoading) return <div className="card" role="status">Loading...</div>;
+
   let filteredItems = items;
-  if (budgetNum) filteredItems = filteredItems.filter((i) => (i.budget || '').includes(budgetNum));
+  if (budgetNum) filteredItems = filteredItems.filter((i) => matchesBudget(i.budget, budgetNum));
   if (buildingType) filteredItems = filteredItems.filter((i) => i.building_type === buildingType);
 
   const actualsByItem = {};
@@ -56,8 +72,8 @@ export default function Actuals() {
     actualsByItem[a.item_id].push(a);
   }
 
-  const needsSubtype = buildingType && BUILDING_SUBTYPE_OPTIONS[buildingType];
-  const subtypeOptions = needsSubtype ? BUILDING_SUBTYPE_OPTIONS[buildingType] : [];
+  const subtypeOptions = actualBuildingSubtypes(buildingType, items, actuals);
+  const needsSubtype = buildingType && subtypeOptions.length > 0;
 
   // Group items by category (grp or category). Normalize "Materials" → "General Materials"
   const byCategory = {};
@@ -68,135 +84,87 @@ export default function Actuals() {
     byCategory[cat].push(item);
   }
 
-  return (
-    <div className="actuals-page">
-      <div className="card">
-        <h2 className="actuals-filters-title">Filters</h2>
-        <div className="actuals-filters">
-          <div className="form-group">
-            <label>
-              Budget Number
-            </label>
-            <select value={budgetNum} onChange={(e) => setBudgetNum(e.target.value)}>
-              <option value="">All</option>
-              {Array.from({ length: 20 }, (_, i) => (
-                <option key={i} value={`Budget ${i + 1}`}>Budget {i + 1}</option>
-              ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label>Building Type</label>
-            <select
-              value={buildingType}
-              onChange={(e) => {
-                setBuildingType(e.target.value);
-                setBuildingSubtype('');
-              }}
-            >
-              <option value="">All</option>
-              {PROPERTY_TYPES.filter((t) => t && t !== 'All').map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-          </div>
-          {needsSubtype && (
-            <div className="form-group">
-              <label>{BUILDING_SUBTYPE_LABELS[buildingType]}</label>
-              <select value={buildingSubtype} onChange={(e) => setBuildingSubtype(e.target.value)}>
-                <option value="">All</option>
-                {subtypeOptions.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
+  const totals = filteredItems.reduce((summary, item) => {
+    summary.planned += plannedAmount(item);
+    summary.actual += summarizeActuals(item, actualsByItem[item.id] || []).cost;
+    return summary;
+  }, { planned: 0, actual: 0 });
+  const totalBudget = budgetPosition(totals.planned, totals.actual);
+  const rowsFor = (item) => summarizeActuals(item, actualsByItem[item.id] || []);
+  const exportCSV = () => {
+    const rows = [['Item', 'Code', 'Unit', 'Original quantity', 'Recorded usage' + (buildingSubtype ? ` (${buildingSubtype})` : ''), 'Available quantity (site-wide)', 'Over quantity (site-wide)', 'Planned unit cost', 'Average actual unit cost', 'Planned value', 'Actual cost', 'Remaining budget', 'Over budget', 'Project site']];
+    for (const item of filteredItems) {
+      const record = rowsFor(item);
+      const position = budgetPosition(plannedAmount(item), record.cost);
+      rows.push([item.name, item.code, item.unit, plannedQuantity(item), record.used, Math.max(0, record.remaining), Math.max(0, -record.remaining), plannedUnitCost(item), record.averageUnitCost, plannedAmount(item), record.cost, position.remainingBudget, position.overBudget, item.project_site]);
+    }
+    const url = URL.createObjectURL(new Blob(['\uFEFF', toCSV(rows)], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'istrom-actuals.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  const adjustmentValid = adjustQty !== '' && adjustCost !== '' && Number.isFinite(Number(adjustQty)) && Number(adjustQty) >= 0 && Number.isFinite(Number(adjustCost)) && Number(adjustCost) >= 0;
 
-        <div className="actuals-heading">
-          <h3>All Budgets</h3>
-          <span className="actuals-comparison-label">BUDGET vs ACTUAL COMPARISON</span>
-        </div>
-
-        {Object.entries(byCategory).map(([category, categoryItems]) => (
-          <div key={category} className="actuals-comparison-section">
-            <div className="actuals-comparison-header">
-              <span className="actuals-category-label">{category.toUpperCase()}</span>
-            </div>
-            <div className="actuals-tables-row">
-              <div className="actuals-planned-column">
-                <h4 className="actuals-column-title">PLANNED BUDGET</h4>
-                <div className="table-wrap">
-                  <table className="actuals-table">
-                    <thead>
-                      <tr>
-                        <th>S/N</th>
-                        <th>Item</th>
-                        <th>Qty</th>
-                        <th>Unit</th>
-                        <th>Unit Cost</th>
-                        <th>Total Cost</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {categoryItems.map((item, idx) => (
-                        <tr key={item.id}>
-                          <td>{idx + 1}</td>
-                          <td>{item.name}</td>
-                          <td>{item.qty}</td>
-                          <td>{item.unit}</td>
-                          <td>{formatNaira(item.unit_cost)}</td>
-                          <td>{formatNaira(item.qty * item.unit_cost)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div className="actuals-actual-column">
-                <h4 className="actuals-column-title">
-                  ACTUALS
-                </h4>
-                <div className="table-wrap">
-                  <table className="actuals-table">
-                    <thead>
-                      <tr>
-                        <th>S/N</th>
-                        <th>Item</th>
-                        <th>Qty</th>
-                        <th>Unit</th>
-                        <th>Unit Cost</th>
-                        <th>Total Cost</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {categoryItems.map((item, idx) => {
-                        const acts = actualsByItem[item.id] || [];
-                        const totalQty = acts.reduce((s, a) => s + a.actual_qty, 0);
-                        const totalCost = acts.reduce((s, a) => s + a.actual_cost, 0);
-                        const avgUnitCost = totalQty > 0 ? totalCost / totalQty : 0;
-                        return (
-                          <tr key={item.id}>
-                            <td>{idx + 1}</td>
-                            <td>{item.name}</td>
-                            <td>{totalQty}</td>
-                            <td>{item.unit}</td>
-                            <td>{formatNaira(avgUnitCost)}</td>
-                            <td>{formatNaira(totalCost)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
-
-        {filteredItems.length === 0 && (
-          <p className="actuals-empty">No items match the selected filters.</p>
-        )}
-      </div>
+  return <div className="actuals-page">
+    <div className="page-heading">
+      <div><h1>Actuals</h1><p>Track recorded usage, remaining quantities, and costs against original inventory.</p></div>
+      <button className="btn btn-secondary" onClick={exportCSV} disabled={!filteredItems.length}>Export CSV</button>
     </div>
-  );
+    <div className="card">
+      <ErrorMessage error={adjustment.error} />
+      <div className="actuals-filters">
+        <div className="form-group"><label htmlFor="actuals-budget">Budget number</label>
+          <select id="actuals-budget" value={budgetNum} onChange={(e) => setBudgetNum(e.target.value)}><option value="">All budgets</option>{budgetNumberOptions(items).map((budget) => <option key={budget} value={budget}>{budget}</option>)}</select>
+        </div>
+        <div className="form-group"><label htmlFor="actuals-building">Building type</label>
+          <select id="actuals-building" value={buildingType} onChange={(e) => { setBuildingType(e.target.value); setBuildingSubtype(''); }}><option value="">All building types</option>{PROPERTY_TYPES.filter((t) => t && t !== 'All').map((t) => <option key={t} value={t}>{t}</option>)}</select>
+        </div>
+        {needsSubtype && <div className="form-group"><label htmlFor="actuals-block">{BUILDING_SUBTYPE_LABELS[buildingType]}</label>
+          <select id="actuals-block" value={buildingSubtype} onChange={(e) => setBuildingSubtype(e.target.value)}><option value="">All</option>{subtypeOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+        </div>}
+      </div>
+      <div className="metrics-row actuals-summary">
+        <div className="metric"><span className="metric-value">{formatNaira(totals.planned)}</span><span className="metric-label">Planned value</span></div>
+        <div className="metric"><span className="metric-value">{formatNaira(totals.actual)}</span><span className="metric-label">Recorded actual cost</span></div>
+        <div className="metric"><span className={`metric-value${totalBudget.overBudget > 0 ? ' actuals-negative' : ''}`}>{formatNaira(totalBudget.overBudget || totalBudget.remainingBudget)}</span><span className="metric-label">{totalBudget.overBudget > 0 ? 'Over budget' : 'Remaining budget'}</span></div>
+      </div>
+      <p className="actuals-help">Approved requests record their full usage and cost here. Excess quantities and spending appear in red. Original inventory and planned budgets stay unchanged. Remaining quantity shows availability across the site{buildingSubtype ? `; usage and costs below are filtered to ${buildingSubtype}` : ''}.</p>
+      {!filteredItems.length && <EmptyState title="No items to compare" description={isAdmin ? 'Add inventory or choose different filters to view usage and actual costs.' : 'Choose different filters, or ask your administrator to add the project inventory.'} />}
+      {Object.entries(byCategory).map(([category, categoryItems]) => <section key={category} className="actuals-comparison-section">
+        <h2>{category}</h2>
+        <div className="table-wrap" role="region" aria-label={`${category} usage and costs`} tabIndex={0}>
+          <table className="data-table actuals-table">
+            <thead><tr><th>Item</th><th className="numeric">Original quantity</th><th className="numeric">Recorded usage</th><th className="numeric">Remaining quantity</th><th className="numeric">Planned value</th><th className="numeric">Actual cost</th><th className="numeric">Budget position</th>{isAdmin && <th>Availability</th>}</tr></thead>
+            <tbody>{categoryItems.map((item) => {
+              const record = rowsFor(item);
+              const usedAboveOriginal = Math.max(0, record.used - plannedQuantity(item));
+              return <tr key={item.id}>
+                <td className="actuals-item"><strong>{item.name}</strong><small>{item.code} · {item.unit}{!ps && item.project_site ? ` · ${item.project_site}` : ''}</small>{item.budget_scope && <small>{item.budget_scope}</small>}</td>
+                <td className="numeric">{formatQuantity(plannedQuantity(item))}</td>
+                <td className={`numeric${usedAboveOriginal > 0 ? ' actuals-negative' : ''}`}>{formatQuantity(record.used)}{usedAboveOriginal > 0 && <small>{formatQuantity(usedAboveOriginal)} over original quantity</small>}</td>
+                <td className={`numeric${record.remaining <= 0 ? ' actuals-negative' : ''}`}><strong>{formatQuantity(Math.max(0, record.remaining))}</strong>{record.remaining < 0 ? <small>Over quantity: {formatQuantity(-record.remaining)} {item.unit}</small> : record.remaining === 0 && <small>None available</small>}</td>
+                <td className="numeric">{formatNaira(plannedAmount(item))}<small>{formatNaira(plannedUnitCost(item))} / {item.unit}</small></td>
+                <td className="numeric">{formatNaira(record.cost)}<small>{formatNaira(record.averageUnitCost)} / {item.unit} average</small></td>
+                <td className={`numeric${record.balance < 0 ? ' actuals-negative' : ''}`}>{formatNaira(Math.abs(record.balance))}<small>{record.balance < 0 ? 'Over budget' : 'Remaining budget'}</small></td>
+                {isAdmin && <td><button className="btn btn-secondary btn-sm" aria-label={`Adjust availability for ${item.name}`} onClick={() => { adjustment.reset(); setAdjustItem(item); setAdjustOver(item.qty < 0); setAdjustQty(String(Math.abs(item.qty))); setAdjustCost(String(item.unit_cost)); }}>Adjust</button></td>}
+              </tr>;
+            })}</tbody>
+          </table>
+        </div>
+      </section>)}
+    </div>
+    {adjustItem && <Modal onClose={() => { if (!adjustment.isPending) closeAdjustment(); }} labelledBy="adjust-availability-title">
+      <h3 id="adjust-availability-title">Adjust {adjustItem.name}</h3>
+      <p className="caption">Update the quantity after receipts or corrections. Choose Over quantity if approved usage still exceeds availability.</p>
+      <ErrorMessage error={adjustment.error} />
+      <div className="form-row">
+        <div className="form-group"><label htmlFor="adjust-position">Quantity position</label><select id="adjust-position" disabled={adjustment.isPending} value={adjustOver ? 'over' : 'available'} onChange={(e) => setAdjustOver(e.target.value === 'over')}><option value="available">Available quantity</option><option value="over">Over quantity</option></select></div>
+        <div className="form-group"><label htmlFor="adjust-qty">{adjustOver ? 'Over quantity' : 'Available quantity'} ({adjustItem.unit})</label><input id="adjust-qty" type="number" min={0} step="any" disabled={adjustment.isPending} value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} /></div>
+        <div className="form-group"><label htmlFor="adjust-cost">Current unit cost (₦)</label><input id="adjust-cost" type="number" min={0} step="0.01" disabled={adjustment.isPending} value={adjustCost} onChange={(e) => setAdjustCost(e.target.value)} /></div>
+      </div>
+      <div className="modal-actions"><button className="btn btn-primary" disabled={!adjustmentValid || adjustment.isPending} onClick={() => adjustment.mutate({ id: adjustItem.id, data: { qty: Number(adjustQty) * (adjustOver ? -1 : 1), unit_cost: Number(adjustCost), expected_qty: adjustItem.qty } })}>{adjustment.isPending ? 'Saving…' : 'Save availability'}</button><button className="btn btn-secondary" disabled={adjustment.isPending} onClick={closeAdjustment}>Cancel</button></div>
+    </Modal>}
+  </div>;
 }

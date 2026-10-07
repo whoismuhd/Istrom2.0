@@ -55,7 +55,7 @@ export async function disablePush() {
   const sub = await getPushSubscription();
   if (sub) {
     try {
-      await api.push.unsubscribe(sub.endpoint);
+      await api.push.unsubscribe(sub.toJSON());
     } finally {
       await sub.unsubscribe();
     }

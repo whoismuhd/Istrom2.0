@@ -3,17 +3,24 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import math
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, BackgroundTasks
 from openpyxl import load_workbook
+from api.services.workbook_security import validate_workbook_archive
+from pydantic import ValidationError
+from zipfile import BadZipFile
+from xml.etree.ElementTree import ParseError
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from db import get_db
 from models import Item, ProjectSite, ProjectSiteAccessCode
 from constants import CATEGORY_OPTIONS, CONSTRUCTION_SECTIONS, PROPERTY_TYPES
-from api.dependencies import enforce_project_site_scope, get_current_admin, get_current_user
+from api.dependencies import enforce_project_site_scope, get_current_admin, get_current_user, require_active_project_site
 from api.schemas import (
     BulkUploadCommitIn,
     BulkUploadCommitOut,
@@ -26,9 +33,12 @@ from api.schemas import (
     WorkbookAnalyzeOut,
     WorkbookSheetPreview,
     WorkbookItemPreview,
+    WorkbookColumnMapping,
 )
-from api.services.budget_workbook_parser import parse_budget_workbook
+from api.services.budget_workbook_parser import parse_budget_workbook, COLUMN_FIELDS
 from api.services.import_template import build_import_template
+from api.services.budget_import_guard import sign_preview, validate_review, import_key
+from api.services.notification_hub import notification_hub
 
 router = APIRouter(prefix="/bulk-upload", tags=["bulk-upload"])
 
@@ -124,6 +134,8 @@ def _parse_non_negative_float(value, field_name: str) -> float:
     else:
         text = _clean_str(value).replace(",", "")
         num = float(text)
+    if not math.isfinite(num):
+        raise ValueError(f"{field_name} must be a finite number")
     if num < 0:
         raise ValueError(f"{field_name} must be non-negative")
     return num
@@ -141,18 +153,29 @@ def _read_csv_rows(content: bytes) -> Tuple[List[str], List[Tuple[int, Dict[str,
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         raise HTTPException(422, "CSV file does not contain a header row")
+    if len(reader.fieldnames) > 100:
+        raise HTTPException(422, "Maximum supported column count is 100")
 
     rows: List[Tuple[int, Dict[str, object]]] = []
     for row_number, row in enumerate(reader, start=2):
         if all(_clean_str(v) == "" for v in row.values()):
             continue
         rows.append((row_number, row))
+        if len(rows) > MAX_UPLOAD_ROWS:
+            raise HTTPException(422, f"Upload exceeds max rows ({MAX_UPLOAD_ROWS})")
     return reader.fieldnames, rows
 
 
 def _read_xlsx_rows(content: bytes) -> Tuple[List[str], List[Tuple[int, Dict[str, object]]]]:
+    try:
+        validate_workbook_archive(content)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     wb = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     ws = wb.active
+    if (ws.max_row or 0) > 10000 or (ws.max_column or 0) > 100:
+        wb.close()
+        raise HTTPException(422, "Maximum supported sheet size is 10000 rows and 100 columns")
     stream = ws.iter_rows(values_only=True)
     header_tuple = next(stream, None)
     if not header_tuple:
@@ -170,10 +193,16 @@ def _read_xlsx_rows(content: bytes) -> Tuple[List[str], List[Tuple[int, Dict[str
         if all(_clean_str(v) == "" for v in row_values):
             continue
         rows.append((row_number, {headers[i]: row_values[i] for i in range(len(headers))}))
+        if len(rows) > MAX_UPLOAD_ROWS:
+            wb.close()
+            raise HTTPException(422, f"Upload exceeds max rows ({MAX_UPLOAD_ROWS})")
+    wb.close()
     return headers, rows
 
 
 def _read_upload_rows(file_name: str, content: bytes) -> Tuple[List[str], List[Tuple[int, Dict[str, object]]]]:
+    if len(content) > MAX_FILE_BYTES:
+        raise HTTPException(422, f"File too large. Max size is {MAX_FILE_BYTES // (1024 * 1024)}MB")
     extension = "." + file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
     if extension not in SUPPORTED_EXTENSIONS:
         raise HTTPException(422, "Unsupported file type. Please upload .csv or .xlsx")
@@ -216,15 +245,18 @@ def _view_csv(file_name: str, content: bytes) -> FileViewerOut:
             text = content.decode("latin-1")
 
     reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
-    if not rows:
+    first_row = next(reader, None)
+    if first_row is None:
         raise HTTPException(422, "CSV file is empty")
-
-    headers = _normalized_headers(rows[0])
-    data_rows = rows[1:]
-    returned_rows = data_rows[:MAX_VIEW_ROWS]
+    if len(first_row) > 100:
+        raise HTTPException(422, "Maximum supported column count is 100")
+    headers = _normalized_headers(first_row)
+    total_rows = 0
     normalized_rows: List[List[str]] = []
-    for row in returned_rows:
+    for row in reader:
+        total_rows += 1
+        if len(normalized_rows) >= MAX_VIEW_ROWS:
+            continue
         values = [_cell_to_text(v) for v in row]
         while len(values) < len(headers):
             values.append("")
@@ -237,19 +269,26 @@ def _view_csv(file_name: str, content: bytes) -> FileViewerOut:
                 sheet_name="CSV",
                 headers=headers,
                 rows=normalized_rows,
-                total_rows=len(data_rows),
+                total_rows=total_rows,
                 returned_rows=len(normalized_rows),
-                truncated=len(data_rows) > len(normalized_rows),
+                truncated=total_rows > len(normalized_rows),
             )
         ],
     )
 
 
 def _view_xlsx(file_name: str, content: bytes) -> FileViewerOut:
+    try:
+        validate_workbook_archive(content)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     wb = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     sheet_outputs: List[FileViewerSheetOut] = []
 
     for ws in wb.worksheets[:MAX_VIEW_SHEETS]:
+        if (ws.max_row or 0) > 10000 or (ws.max_column or 0) > 100:
+            wb.close()
+            raise HTTPException(422, "Maximum supported sheet size is 10000 rows and 100 columns")
         stream = ws.iter_rows(values_only=True)
         header_row = next(stream, None)
         if header_row is None:
@@ -281,6 +320,7 @@ def _view_xlsx(file_name: str, content: bytes) -> FileViewerOut:
             )
         )
 
+    wb.close()
     if not sheet_outputs:
         raise HTTPException(422, "Excel file contains no sheets")
 
@@ -343,6 +383,14 @@ def _validate_rows(
         building_raw = _clean_str(canonical.get("building_type"))
         grp = _clean_str(canonical.get("grp")) or None
         site_raw = _clean_str(canonical.get("project_site")) or _clean_str(default_project_site)
+
+        for field, value, limit in (
+            ('name', name, 255), ('unit', unit, 50), ('budget', budget, 255),
+            ('section', section_raw, 255), ('grp', grp or '', 255),
+        ):
+            if len(value) > limit:
+                row_errors.append(BulkUploadRowError(row_number=row_number, field=field,
+                    message=f'{field} must be at most {limit} characters.'))
 
         try:
             qty = _parse_non_negative_float(canonical.get("qty"), "qty")
@@ -513,7 +561,7 @@ async def view_uploaded_file(
     if extension not in SUPPORTED_EXTENSIONS:
         raise HTTPException(422, "Unsupported file type. Please upload .csv or .xlsx")
 
-    content = await file.read()
+    content = await file.read(MAX_FILE_BYTES + 1)
     if not content:
         raise HTTPException(422, "Uploaded file is empty")
     if len(content) > MAX_FILE_BYTES:
@@ -532,7 +580,7 @@ async def preview_bulk_upload(
     user: dict = Depends(get_current_admin),
 ):
     file_name = _clean_str(file.filename) or "upload"
-    content = await file.read()
+    content = await file.read(MAX_FILE_BYTES + 1)
     if not content:
         raise HTTPException(422, "Uploaded file is empty")
 
@@ -598,25 +646,43 @@ def download_import_template(user: dict = Depends(get_current_admin)):
 async def analyze_budget_workbook(
     file: UploadFile = File(...),
     project_site: str = Form(...),
+    mappings: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_admin),
 ):
     site = _clean_str(project_site)
     if not site:
         raise HTTPException(422, "project_site is required")
-    effective_site = enforce_project_site_scope(user, site) or site
+    effective_site = require_active_project_site(db, user, site)
 
     file_name = _clean_str(file.filename) or "upload.xlsx"
     if not file_name.lower().endswith(".xlsx"):
         raise HTTPException(422, "Please upload a .xlsx budget workbook")
-    content = await file.read()
+    content = await file.read(MAX_FILE_BYTES + 1)
     if not content:
         raise HTTPException(422, "Uploaded file is empty")
     if len(content) > MAX_FILE_BYTES:
         raise HTTPException(422, f"File too large. Max size is {MAX_FILE_BYTES // (1024 * 1024)}MB")
 
-    parsed = parse_budget_workbook(content)
+    try:
+        raw_mappings = json.loads(mappings) if mappings else {}
+        if not isinstance(raw_mappings, dict):
+            raise ValueError('Column mappings must be an object keyed by sheet name.')
+        checked_mappings = {}
+        for name, values in raw_mappings.items():
+            mapped = WorkbookColumnMapping.model_validate(values)
+            if set(mapped.columns) - COLUMN_FIELDS or any(idx < 0 or idx >= 100 for idx in mapped.columns.values()):
+                raise ValueError(f'{name}: invalid column selection.')
+            if len(set(mapped.columns.values())) != len(mapped.columns):
+                raise ValueError(f'{name}: choose a different column for each field.')
+            checked_mappings[name] = mapped.model_dump()
+        parsed = parse_budget_workbook(content, checked_mappings)
+    except (ValidationError, ValueError, TypeError) as exc:
+        raise HTTPException(422, f'Could not read workbook: {exc}') from exc
+    except (BadZipFile, KeyError, ParseError, OSError) as exc:
+        raise HTTPException(422, 'This file is not a readable Excel workbook. Save it as .xlsx and try again.') from exc
     existing = _existing_item_keys(db, effective_site)
+    existing_imports = {value for (value,) in db.query(Item.import_key).filter(Item.project_site == effective_site).all() if value}
 
     sheet_previews: List[WorkbookSheetPreview] = []
     total_items = 0
@@ -625,7 +691,9 @@ async def analyze_budget_workbook(
         item_previews: List[WorkbookItemPreview] = []
         for it in sheet.items:
             dup_key = (it.name.lower(), it.budget.lower(), it.section.lower(), _clean_str(sheet.building_type).lower())
-            is_dup = dup_key in existing
+            is_dup = import_key(parsed.workbook_id, effective_site, it.sheet_name, it.row_number) in existing_imports
+            if not is_dup and dup_key in existing:
+                it.warnings.append('A similar item is already in inventory. Check its building scope before adding this budget line.')
             if is_dup:
                 total_dupes += 1
             total_items += 1
@@ -634,7 +702,8 @@ async def analyze_budget_workbook(
                 category=it.category, grp=it.grp, section=it.section,
                 section_matched=it.section_matched, budget=it.budget,
                 sheet_name=it.sheet_name, row_number=it.row_number,
-                duplicate=is_dup, warnings=it.warnings,
+                duplicate=is_dup, warnings=it.warnings, errors=it.errors,
+                source_amount=it.source_amount, excluded_by_default=it.excluded_by_default,
             ))
         sheet_previews.append(WorkbookSheetPreview(
             sheet_name=sheet.sheet_name,
@@ -645,6 +714,7 @@ async def analyze_budget_workbook(
             item_count=len(item_previews),
             warnings=sheet.warnings,
             items=item_previews,
+            **{name: getattr(sheet, name) for name in ('budget_scope', 'suggested_multiplier', 'multiplier_evidence', 'source_total', 'source_total_cell', 'source_total_formula', 'source_total_label', 'summary_label', 'total_unreadable', 'requires_confirmation')},
         ))
 
     return WorkbookAnalyzeOut(
@@ -653,20 +723,24 @@ async def analyze_budget_workbook(
         sheet_count=len(sheet_previews),
         item_count=total_items,
         duplicate_count=total_dupes,
-        sheets=sheet_previews,
+        sheets=sheet_previews, layouts=parsed.layouts, warnings=parsed.warnings,
+        preview_token=sign_preview(parsed, effective_site, user),
     )
 
 
 @router.post("/commit", response_model=BulkUploadCommitOut)
 def commit_bulk_upload(
     payload: BulkUploadCommitIn,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_admin),
 ):
     site = _clean_str(payload.project_site)
     if not site:
         raise HTTPException(422, "project_site is required")
-    effective_site = enforce_project_site_scope(user, site) or site
+    effective_site = require_active_project_site(db, user, site)
+    reviewed_keys = validate_review(payload, effective_site, user)
+    previously_imported = {item.import_key: item for item in db.query(Item).filter(Item.project_site == effective_site, Item.import_key.is_not(None)).all()}
 
     valid_btypes = {b for b in PROPERTY_TYPES if b}
     existing = _existing_item_keys(db, effective_site)
@@ -681,6 +755,10 @@ def commit_bulk_upload(
     to_insert = []
     skipped = []
     for idx, row in enumerate(payload.rows, start=1):
+        if _clean_str(row.project_site) != effective_site:
+            raise HTTPException(422, f"Row {idx}: project_site does not match the selected project site")
+        if not _clean_str(row.budget):
+            raise HTTPException(422, f"Row {idx}: budget is required")
         if row.category not in CATEGORY_OPTIONS:
             raise HTTPException(422, f"Row {idx}: invalid category '{row.category}'")
         if row.building_type not in valid_btypes:
@@ -694,30 +772,43 @@ def commit_bulk_upload(
             row.name.lower(), _clean_str(row.budget).lower(),
             _clean_str(row.section).lower(), _clean_str(row.building_type).lower(),
         )
-        if payload.skip_existing and dup_key in existing:
+        source_key = reviewed_keys.get(idx - 1)
+        if source_key in previously_imported:
+            saved = previously_imported[source_key]
+            if any((saved.name != row.name, saved.budget != row.budget, saved.budget_scope != row.budget_scope,
+                    saved.category != row.category, saved.section != row.section, saved.building_type != row.building_type,
+                    saved.unit != row.unit, abs(saved.planned_qty - row.qty) > 1e-8, abs(saved.planned_unit_cost - row.unit_cost) > 1e-8)):
+                raise HTTPException(422, f'{row.name}: this source row was already imported with different values. Review the existing item before importing again.')
+            skipped.append(f"{row.name} ({row.budget_scope})")
+            continue
+        if payload.skip_existing and not source_key and dup_key in existing:
             skipped.append(f"{row.name} ({row.building_type})")
             continue
-        existing.add(dup_key)
-        to_insert.append(row)
-
-    last_item = db.query(Item.id).order_by(Item.id.desc()).first()
-    next_num = (last_item[0] if last_item else 0) + 1
+        to_insert.append((row, source_key))
 
     created_codes = []
     try:
-        for row in to_insert:
-            code = f"IT-{next_num}"
-            db.add(Item(
-                code=code, name=row.name, category=row.category, unit=row.unit,
+        for row, source_key in to_insert:
+            item = Item(
+                name=row.name, category=row.category, unit=row.unit,
                 qty=row.qty, unit_cost=row.unit_cost, budget=row.budget,
+                planned_qty=row.qty, planned_unit_cost=row.unit_cost,
                 section=row.section, grp=row.grp, building_type=row.building_type,
                 project_site=effective_site,
-            ))
-            created_codes.append(code)
-            next_num += 1
+                budget_scope=row.budget_scope, source_sheet=row.source_sheet, source_row=row.source_row, import_key=source_key,
+            )
+            db.add(item)
+            db.flush()
+            item.code = f"IT-{item.id}"
+            created_codes.append(item.code)
         db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, 'A source row was imported during this review. Preview the workbook again.') from exc
     except Exception:
         db.rollback()
         raise
 
+    if created_codes:
+        background_tasks.add_task(notification_hub.broadcast_workspace_changed, effective_site)
     return BulkUploadCommitOut(inserted_count=len(created_codes), created_codes=created_codes, skipped=skipped)

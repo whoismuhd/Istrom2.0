@@ -1,10 +1,9 @@
 """In-memory login rate limiter (per client key).
 
-Guards /auth/login against brute force of the short shared access codes.
+Guards login, administrator setup and password checks by IP and account name.
 State is process-local, so with multiple uvicorn workers each worker keeps its
-own counters — acceptable for this internal, low-worker deployment. A
-distributed store (e.g. Redis) would be the drop-in upgrade for horizontal
-scale.
+own counters. A shared store is required for consistent throttling across
+multiple workers.
 """
 from __future__ import annotations
 

@@ -1,3 +1,5 @@
+import ErrorMessage from '../components/ErrorMessage';
+import LoadError from '../components/LoadError';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
@@ -19,8 +21,9 @@ export default function ManualEntry() {
   const [unit, setUnit] = useState('pcs');
   const [unitCost, setUnitCost] = useState('');
   const [category, setCategory] = useState('Materials');
+  const [formError, setFormError] = useState('');
 
-  const { data: constants = {} } = useQuery({
+  const { data: constants = {}, error: constantsError, isLoading: constantsLoading, refetch: retryConstants } = useQuery({
     queryKey: ['constants'],
     queryFn: () => api.constants.get(),
   });
@@ -33,20 +36,31 @@ export default function ManualEntry() {
     mutationFn: (data) => api.items.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['items'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      setFormError('');
       setName('');
       setQty('');
       setUnitCost('');
     },
   });
 
+  const loadError = constantsError;
+  if (loadError) return <LoadError error={loadError} onRetry={() => { retryConstants(); }} />;
+  if (constantsLoading) return <div className="card" role="status">Loading...</div>;
+
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (!getEffectiveProjectSite()) {
+      setFormError('Select a project site in the header before adding an item.');
+      return;
+    }
+    setFormError('');
+    createMutation.reset();
     if (!isAdmin) return;
-    if (!name.trim()) return;
-    if (buildingType === 'All' || buildingType === '') return;
-    if (budgetNum === 'All' || budgetNum === '') return;
-    if (section === 'All' || section === '') return;
-    if (budgetLabel === 'All' || !budgetLabel) return;
+    if (!name.trim() || !buildingType || !budgetNum || !section || !budgetLabels.includes(budgetLabel)) {
+      setFormError('Enter an item name and select a building type, budget number, section, and budget label.');
+      return;
+    }
 
     const qtyNum = qty === '' ? 0 : parseFloat(qty) || 0;
     const unitCostNum = unitCost === '' ? 0 : parseFloat(unitCost) || 0;
@@ -69,8 +83,11 @@ export default function ManualEntry() {
 
   return (
     <div className="card">
-      <h2>Manual Entry - Budget Builder</h2>
-      <p className="caption">Add items with proper categorization and context</p>
+      <h1>Add inventory items</h1>
+      <ErrorMessage error={createMutation.error || formError} />
+      {createMutation.isSuccess && <p className="request-confirmation" role="status">{createMutation.data.name} added to inventory.</p>}
+      <p className="caption">Record starting quantities, unit costs, and budget details.</p>
+      {isAdmin && !getEffectiveProjectSite() && <div className="alert alert-warning">Select a project site in the header before adding an item.</div>}
 
       {!isAdmin && (
         <div className="alert alert-warning">
@@ -80,8 +97,8 @@ export default function ManualEntry() {
 
       <div className="form-row">
         <div className="form-group">
-          <label>Building Type</label>
-          <select value={buildingType} onChange={(e) => setBuildingType(e.target.value)}>
+          <label htmlFor="manualentry-field-1">Building Type</label>
+          <select id="manualentry-field-1" value={buildingType} onChange={(e) => { setBuildingType(e.target.value); setBudgetLabel(''); }}>
             {PROPERTY_TYPES.map((t) => (
               <option key={t || 'all'} value={t}>
                 {t || 'All'}
@@ -90,8 +107,8 @@ export default function ManualEntry() {
           </select>
         </div>
         <div className="form-group">
-          <label>Budget Number</label>
-          <select value={budgetNum} onChange={(e) => setBudgetNum(e.target.value)}>
+          <label htmlFor="manualentry-field-2">Budget Number</label>
+          <select id="manualentry-field-2" value={budgetNum} onChange={(e) => { setBudgetNum(e.target.value); setBudgetLabel(''); }}>
             <option value="">All</option>
             {Array.from({ length: 20 }, (_, i) => (
               <option key={i} value={`Budget ${i + 1}`}>
@@ -101,8 +118,8 @@ export default function ManualEntry() {
           </select>
         </div>
         <div className="form-group">
-          <label>Section</label>
-          <select value={section} onChange={(e) => setSection(e.target.value)}>
+          <label htmlFor="manualentry-field-3">Section</label>
+          <select id="manualentry-field-3" value={section} onChange={(e) => setSection(e.target.value)}>
             <option value="">All</option>
             {sections.map((s) => (
               <option key={s} value={s}>
@@ -112,8 +129,8 @@ export default function ManualEntry() {
           </select>
         </div>
         <div className="form-group">
-          <label>Budget Label</label>
-          <select value={budgetLabel} onChange={(e) => setBudgetLabel(e.target.value)}>
+          <label htmlFor="manualentry-field-4">Budget Label</label>
+          <select id="manualentry-field-4" value={budgetLabel} onChange={(e) => setBudgetLabel(e.target.value)}>
             <option value="">All</option>
             {budgetLabels.map((b) => (
               <option key={b} value={b}>
@@ -128,36 +145,46 @@ export default function ManualEntry() {
         <form onSubmit={handleSubmit} className="add-item-form">
           <div className="form-row">
             <div className="form-group form-group-wide">
-              <label>Item Name</label>
-              <input
+              <label htmlFor="manualentry-field-5">Item Name</label>
+              <input id="manualentry-field-5"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Item name"
+                maxLength={255}
+                disabled={createMutation.isPending}
                 required
               />
             </div>
             <div className="form-group">
-              <label>Quantity</label>
-              <input
+              <label htmlFor="manualentry-field-6">Quantity</label>
+              <input id="manualentry-field-6"
                 type="number"
+                required
+                disabled={createMutation.isPending}
                 min={0}
+                step="any"
                 value={qty}
                 onChange={(e) => setQty(e.target.value)}
                 placeholder="0"
               />
             </div>
             <div className="form-group">
-              <label>Unit</label>
-              <input
+              <label htmlFor="manualentry-field-7">Unit</label>
+              <input id="manualentry-field-7"
                 value={unit}
                 onChange={(e) => setUnit(e.target.value)}
                 placeholder="pcs, trips, bags"
+                required
+                maxLength={50}
+                disabled={createMutation.isPending}
               />
             </div>
             <div className="form-group">
-              <label>Unit Cost (₦)</label>
-              <input
+              <label htmlFor="manualentry-field-8">Unit Cost (₦)</label>
+              <input id="manualentry-field-8"
                 type="number"
+                required
+                disabled={createMutation.isPending}
                 min={0}
                 step={0.01}
                 value={unitCost}
@@ -166,8 +193,8 @@ export default function ManualEntry() {
               />
             </div>
             <div className="form-group">
-              <label>Category</label>
-              <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              <label htmlFor="manualentry-field-9">Category</label>
+              <select id="manualentry-field-9" disabled={createMutation.isPending} value={category} onChange={(e) => setCategory(e.target.value)}>
                 {categories.map((c) => (
                   <option key={c} value={c}>
                     {c}

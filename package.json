@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev:backend": "cd backend && python -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:backend": "cd backend && python -m uvicorn api.main:app --reload --host 127.0.0.1 --port 8000",
     "dev:frontend": "cd frontend && npm run dev",
     "build": "cd frontend && npm run build",
     "install:all": "pip install -r backend/requirements.txt && cd frontend && npm install",

@@ -39,9 +39,9 @@ def test_login_endpoint_locks_out(client):
     login_limiter.reset()
     try:
         for _ in range(login_limiter.max_attempts):
-            r = client.post("/auth/login", json={"access_code": "definitely-wrong"})
+            r = client.post("/auth/login", json={"user_type": "project_site", "username": "nonexistent", "password": "definitely-wrong"})
             assert r.status_code == 401
-        r = client.post("/auth/login", json={"access_code": "definitely-wrong"})
+        r = client.post("/auth/login", json={"user_type": "project_site", "username": "nonexistent", "password": "definitely-wrong"})
         assert r.status_code == 429
         assert "Try again" in r.json()["detail"]
     finally:

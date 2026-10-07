@@ -9,6 +9,9 @@ export default defineConfig({
     strictPort: true,
     headers: {
       'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'X-Frame-Options': 'DENY',
     },
     proxy: {
       '/api': {

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import ErrorMessage from '../components/ErrorMessage';
+import LoadError from '../components/LoadError';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, formatDate } from '../api';
 import { pushSupported, getPushSubscription, enablePush, disablePush } from '../push';
@@ -47,7 +49,7 @@ export default function Notifications() {
     }
   };
 
-  const { data: notifications = [] } = useQuery({
+  const { data: notifications = [], error: loadError, isLoading, refetch } = useQuery({
     queryKey: ['notifications'],
     queryFn: () => api.notifications.list(),
   });
@@ -59,10 +61,14 @@ export default function Notifications() {
 
   const hasDetails = (n) => n.item_name || n.budget || n.building_subtype;
 
+  if (loadError) return <LoadError error={loadError} onRetry={() => refetch()} />;
+  if (isLoading) return <div className="card" role="status">Loading...</div>;
+
   return (
     <div className="notifications-page">
       <div className="card">
-        <h2>Your Notifications</h2>
+        <h1>Notifications</h1>
+        <ErrorMessage error={markReadMutation.error} />
         <p className="caption">View approvals, rejections, and submissions</p>
 
         {pushSupported() && (

@@ -1,35 +1,11 @@
 .istrom-logo {
-  font-family: 'Barlow Condensed', 'Manrope', sans-serif;
-  font-weight: 700;
-  font-size: 1.6rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
-}
-
-.logo-str {
-  color: var(--accent-safety);
-}
-
-.logo-o {
-  position: relative;
   display: inline-block;
-  margin: 0 0.01em;
-}
-
-.logo-o::after {
-  content: '';
-  position: absolute;
-  left: 5%;
-  top: 52%;
-  transform: translateY(-50%) skewX(-16deg);
-  width: 90%;
-  height: 2px;
-  background: currentColor;
-}
-
-.logo-m {
-  color: #ffd287;
+  flex-shrink: 0;
+  width: 6em;
+  aspect-ratio: 28566 / 6160;
+  font-size: 1.45rem;
+  vertical-align: middle;
+  background-color: currentColor;
+  -webkit-mask: url('../assets/istrom-wordmark.svg') center / contain no-repeat;
+  mask: url('../assets/istrom-wordmark.svg') center / contain no-repeat;
 }

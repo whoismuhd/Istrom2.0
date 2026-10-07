@@ -19,8 +19,8 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'ISTROM';
   const options = {
     body: data.body || '',
-    icon: '/vite.svg',
-    badge: '/vite.svg',
+    icon: '/istrom-icon.png',
+    badge: '/istrom-badge.png',
     tag: data.notification_id ? `istrom-${data.notification_id}` : undefined,
     data: { url: data.url || '/notifications' },
   };

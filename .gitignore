@@ -18,11 +18,17 @@ dist-ssr/
 *.db
 *.sqlite
 *.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*
 
 # Environment files (keep .env.example tracked)
 .env
 **/.env
+.env.*
+**/.env.*
 !.env.example
+!**/.env.example
 
 # Local tooling / editor
 .claude/

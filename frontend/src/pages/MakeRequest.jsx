@@ -1,15 +1,15 @@
+import AvailabilityNotice from '../components/AvailabilityNotice';
+import { requestAvailability } from '../utils/inventory.js';
+import ErrorMessage from '../components/ErrorMessage';
+import LoadError from '../components/LoadError';
+import { matchesBudget, budgetNumberOptions } from '../utils/budgets';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatNaira } from '../api';
+import { BUILDING_SUBTYPE_OPTIONS, requestBuildingType } from '../utils/buildings';
 
 const PROPERTY_TYPES = ['', 'All', 'Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
-const BUILDING_SUBTYPE_OPTIONS = {
-  Flats: ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13'],
-  Terraces: ['A (T1-T6)', 'B (T7-T12)', 'C (T13-T18)', 'D (T19-T24)', 'E (T25-T30)', 'F (T31-T36)', 'G (T37-T42)', 'H (T43-T48)', 'I (T49-T53)', 'J (T54-T58)', 'K (T59-T64)', 'L (T65-T70)', 'M (T71-T76)', 'N (T77-T82)', 'O (T83-T88)', 'P (T89-T94)', 'Q (T95-T100)', 'R (T101-T106)', 'S (T107-T112)', 'T (T113-T118)', 'U (T119-T124)', 'V (T125-T130)', 'W (T131-T136)', 'X (T137-T142)'],
-  'Semi-detached': Array.from({ length: 29 }, (_, i) => `SD ${i + 1}`),
-  'Fully-detached': Array.from({ length: 52 }, (_, i) => `D${i + 1}`),
-};
 
 export default function MakeRequest() {
   const { user, getEffectiveProjectSite } = useAuth();
@@ -23,29 +23,35 @@ export default function MakeRequest() {
   const [qty, setQty] = useState(1);
   const [currentPrice, setCurrentPrice] = useState('');
   const [note, setNote] = useState('');
+  const [formError, setFormError] = useState('');
+  const clearSelectedItem = () => { setItemId(''); setCurrentPrice(''); setBuildingSubtype(''); };
 
   const params = {};
   const ps = getEffectiveProjectSite();
   if (ps) params.project_site = ps;
   if (buildingType) params.building_type = buildingType;
 
-  const { data: items = [] } = useQuery({
+  const { data: items = [], error: itemsError, isLoading: itemsLoading, refetch: retryItems } = useQuery({
     queryKey: ['items', params],
     queryFn: () => api.items.list(params),
   });
 
   let filteredItems = items;
-  if (budgetNum) filteredItems = filteredItems.filter((i) => (i.budget || '').includes(budgetNum));
+  if (budgetNum) filteredItems = filteredItems.filter((i) => matchesBudget(i.budget, budgetNum));
   if (budgetLabel) filteredItems = filteredItems.filter((i) => i.budget === budgetLabel);
 
-  const needsSubtype = buildingType && BUILDING_SUBTYPE_OPTIONS[buildingType];
-  const subtypeOptions = needsSubtype ? BUILDING_SUBTYPE_OPTIONS[buildingType] : [];
+  const selectedItem = items.find((i) => String(i.id) === String(itemId));
+  const selectedBuildingType = requestBuildingType(selectedItem, buildingType);
+  const subtypeOptions = BUILDING_SUBTYPE_OPTIONS[selectedBuildingType] || [];
+  const needsSubtype = subtypeOptions.length > 0;
 
   const createMutation = useMutation({
     mutationFn: (data) => api.requests.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['requests'] });
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      setFormError('');
       setItemId('');
       setQty(1);
       setCurrentPrice('');
@@ -53,17 +59,30 @@ export default function MakeRequest() {
     },
   });
 
+  const loadError = itemsError;
+  if (loadError) return <LoadError error={loadError} onRetry={() => { retryItems(); }} />;
+  if (itemsLoading) return <div className="card" role="status">Loading...</div>;
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!itemId || !budgetLabel) return;
-    if (needsSubtype && !buildingSubtype) {
-      alert('Please select ' + buildingType + ' subtype');
+    setFormError('');
+    createMutation.reset();
+    if (!itemId || !budgetLabel || !filteredItems.some((item) => String(item.id) === itemId)) {
+      setFormError('Select a budget and an item that matches the current filters.');
+      return;
+    }
+    if (needsSubtype && !subtypeOptions.includes(buildingSubtype)) {
+      setFormError('Select a building subtype for ' + selectedBuildingType + '.');
+      return;
+    }
+    if (!availability.valid) {
+      setFormError('Enter a quantity greater than zero.');
       return;
     }
     createMutation.mutate({
       item_id: parseInt(itemId),
       qty: Number(qty),
-      requested_by: user?.full_name || user?.username || 'Unknown',
+      requested_by: user?.username || 'Unknown',
       current_price: currentPrice ? parseFloat(currentPrice) : null,
       note: note || null,
       building_subtype: buildingSubtype || null,
@@ -73,18 +92,12 @@ export default function MakeRequest() {
 
   const budgetLabels = [...new Set(
     items
-      .filter((i) => !budgetNum || (i.budget || '').includes(budgetNum))
+      .filter((i) => !budgetNum || matchesBudget(i.budget, budgetNum))
       .map((i) => i.budget)
       .filter(Boolean)
   )].sort();
 
-  const formatQty = (value) => {
-    const num = Number(value);
-    if (Number.isNaN(num)) return value;
-    return num.toLocaleString('en-NG', { maximumFractionDigits: 2 });
-  };
-
-  const selectedItem = items.find((i) => String(i.id) === String(itemId));
+  const availability = requestAvailability(qty, selectedItem?.qty);
   const itemUnitCost = Number(selectedItem?.unit_cost || 0);
   const overrideUnitCost = currentPrice === '' ? null : Number(currentPrice);
   const effectiveUnitCost = overrideUnitCost != null && !Number.isNaN(overrideUnitCost)
@@ -94,34 +107,39 @@ export default function MakeRequest() {
   const showTotal = Boolean(itemId) && Number(qty) > 0;
 
   return (
-    <div className="card">
-      <h2>Make a Request</h2>
+    <div className="card request-card">
+      <h1>New request</h1>
+      <ErrorMessage error={createMutation.error || formError} />
+      {createMutation.isSuccess && <div className="request-confirmation" role="status"><strong>Request #{createMutation.data.id} submitted</strong><span>Pending approval</span></div>}
 
       <form onSubmit={handleSubmit}>
+        <fieldset className="form-fields" disabled={createMutation.isPending}>
         <div className="form-row">
           <div className="form-group">
-            <label>Budget Number</label>
-            <select
+            <label htmlFor="makerequest-field-1">Budget Number</label>
+            <select id="makerequest-field-1"
               value={budgetNum}
               onChange={(e) => {
                 setBudgetNum(e.target.value);
                 setBudgetLabel('');
+                clearSelectedItem();
               }}
             >
               <option value="">All</option>
-              {Array.from({ length: 20 }, (_, i) => (
-                <option key={i} value={`Budget ${i + 1}`}>Budget {i + 1}</option>
+              {budgetNumberOptions(items).map((budget) => (
+                <option key={budget} value={budget}>{budget}</option>
               ))}
             </select>
           </div>
           <div className="form-group">
-            <label>Building Type</label>
-            <select
+            <label htmlFor="makerequest-field-2">Building Type</label>
+            <select id="makerequest-field-2"
               value={buildingType}
               onChange={(e) => {
                 setBuildingType(e.target.value);
                 setBudgetLabel('');
                 setBuildingSubtype('');
+                clearSelectedItem();
               }}
             >
               <option value="">All</option>
@@ -131,8 +149,8 @@ export default function MakeRequest() {
             </select>
           </div>
           <div className="form-group">
-            <label>Budget</label>
-            <select value={budgetLabel} onChange={(e) => setBudgetLabel(e.target.value)}>
+            <label htmlFor="makerequest-field-3">Budget</label>
+            <select id="makerequest-field-3" value={budgetLabel} onChange={(e) => { setBudgetLabel(e.target.value); clearSelectedItem(); }}>
               <option value="">Select budget</option>
               {budgetLabels.map((b) => (
                 <option key={b} value={b}>{b}</option>
@@ -141,8 +159,8 @@ export default function MakeRequest() {
           </div>
           {needsSubtype && (
             <div className="form-group">
-              <label>Building Subtype</label>
-              <select value={buildingSubtype} onChange={(e) => setBuildingSubtype(e.target.value)} required>
+              <label htmlFor="makerequest-field-4">Building Subtype</label>
+              <select id="makerequest-field-4" value={buildingSubtype} onChange={(e) => setBuildingSubtype(e.target.value)} required>
                 <option value="">Select...</option>
                 {subtypeOptions.map((s) => (
                   <option key={s} value={s}>{s}</option>
@@ -154,79 +172,67 @@ export default function MakeRequest() {
 
         <div className="form-row">
           <div className="form-group form-group-wide">
-            <label>Item</label>
-            <select value={itemId} onChange={(e) => setItemId(e.target.value)} required>
+            <label htmlFor="makerequest-field-5">Item</label>
+            <select id="makerequest-field-5" value={itemId} onChange={(e) => { setItemId(e.target.value); setCurrentPrice(''); setBuildingSubtype(''); }} required>
               <option value="">Select item</option>
               {filteredItems.map((i) => (
                 <option key={i.id} value={i.id}>
-                  {i.name} ({i.unit}) - {formatQty(i.qty)} available - {formatNaira(i.unit_cost)} / {i.unit}
+                  {i.name} ({i.unit}){i.budget_scope ? ` · ${i.budget_scope}` : ''} — {formatNaira(i.unit_cost)} per {i.unit}
                 </option>
               ))}
             </select>
           </div>
           <div className="form-group">
-            <label>Quantity</label>
-            <input
+            <label htmlFor="makerequest-field-6">Quantity{selectedItem ? ` (${selectedItem.unit})` : ''}</label>
+            <input id="makerequest-field-6"
               type="number"
-              min={1}
+              min={0}
+              step="any"
+              required
+              className={availability.insufficient ? 'input-shortage' : ''}
+              aria-invalid={availability.insufficient || !availability.valid}
+              aria-describedby={selectedItem ? 'request-availability' : undefined}
               value={qty}
-              onChange={(e) => setQty(parseFloat(e.target.value) || 1)}
+              onChange={(e) => setQty(e.target.value)}
             />
           </div>
         </div>
 
+        {selectedItem && <div id="request-availability"><AvailabilityNotice quantity={qty} available={selectedItem.qty} unit={selectedItem.unit} /></div>}
+
         <div className="form-row">
           <div className="form-group">
-            <label>Requested By</label>
-            <input
-              value={user?.full_name || user?.username || ''}
-              readOnly
-              disabled
-            />
-          </div>
-          <div className="form-group">
-            <label>Current Price Override (₦)</label>
-            <input
+            <label htmlFor="makerequest-field-8">Unit price (₦)</label>
+            <input id="makerequest-field-8"
               type="number"
               step={0.01}
+              min={0}
               value={currentPrice}
               onChange={(e) => setCurrentPrice(e.target.value)}
               placeholder="Optional"
             />
           </div>
-        </div>
-
-        {showTotal && (
-          <div className="form-row">
+          {showTotal && (
             <div className="form-group">
-              <label>Estimated Total (₦)</label>
-              <input
+              <label htmlFor="makerequest-field-9">Estimated Total (₦)</label>
+              <input id="makerequest-field-9"
                 value={formatNaira(totalCost)}
                 readOnly
                 disabled
               />
             </div>
-            <div className="form-group">
-              <label>Price Source</label>
-              <input
-                value={overrideUnitCost != null && !Number.isNaN(overrideUnitCost)
-                  ? `Override price (${formatNaira(overrideUnitCost)} per unit)`
-                  : `Item unit cost (${formatNaira(itemUnitCost)} per unit)`}
-                readOnly
-                disabled
-              />
-            </div>
-          </div>
-        )}
-
-        <div className="form-group">
-          <label>Note</label>
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
+          )}
         </div>
 
-        <button type="submit" className="btn btn-primary" disabled={createMutation.isPending}>
-          {createMutation.isPending ? 'Submitting...' : 'Submit Request'}
+        <div className="form-group">
+          <label htmlFor="makerequest-field-11">Note</label>
+          <textarea id="makerequest-field-11" value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
+        </div>
+
+        <button type="submit" className={`btn ${availability.insufficient ? 'btn-shortage' : 'btn-primary'}`} disabled={createMutation.isPending || !availability.valid}>
+          {createMutation.isPending ? 'Submitting...' : availability.insufficient ? 'Submit request with shortage' : 'Submit request'}
         </button>
+        </fieldset>
       </form>
     </div>
   );

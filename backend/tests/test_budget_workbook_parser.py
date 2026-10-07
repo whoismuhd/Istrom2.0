@@ -140,7 +140,8 @@ def test_parse_extracts_items_with_mapping():
     assert names == ["PEGS", "CEMENTS", "Y16MM", "MASON"]
 
     pegs = sheet.items[0]
-    assert pegs.qty == 0  # blank qty -> 0
+    assert pegs.qty is None  # blank quantities need a correction in preview
+    assert any("Quantity" in error for error in pegs.errors)
     assert pegs.unit == "pcs"
     assert pegs.unit_cost == 500
     assert pegs.category == "Materials"
@@ -178,18 +179,46 @@ def test_parse_flat_template_groups_by_building_and_budget():
 
 
 def test_import_template_roundtrips_through_parser():
+    import io
+    from openpyxl import load_workbook
     from api.services.import_template import build_import_template
-    wb = parse_budget_workbook(build_import_template())
-    # The 3 seeded example rows -> (Flats, B1) x2 and (Terraces, B2) x1.
-    assert len(wb.sheets) == 2
-    flats = next(s for s in wb.sheets if s.building_type == "Flats")
-    cement = next(i for i in flats.items if i.name.startswith("Cement"))
-    assert cement.grp == "General Materials"
-    assert cement.category == "Materials"
-    assert cement.qty == 803
-    assert cement.unit_cost == 9400
-    assert cement.section_matched is True
-    assert cement.budget == "Budget 1 - Flats(General Materials)"
+    content = build_import_template()
+    template = load_workbook(io.BytesIO(content))
+    sheet = template['Budget']
+    assert sheet['A2'].value == 'Section'
+    assert sheet['B2'].value is None
+    assert [sheet.cell(9, col).value for col in range(1, 8)] == ['S/N', 'MATERIALS', 'QTY', 'UNIT', 'RATE (₦)', 'AMOUNT (₦)', 'GROUP']
+    assert all(sheet[f'B{row}'].value is None for row in [*range(10, 40), *range(45, 65)])
+    assert sheet['F69'].value == '=F68*$F$5'
+    assert any('B2' in validation.sqref and validation.type == 'list' for validation in sheet.data_validations.dataValidation)
+    assert not parse_budget_workbook(content).sheets  # no example stock is imported
+    template.close()
+
+
+def test_shared_fields_and_groups_above_section_tables():
+    from tests.conftest import build_cached_workbook
+    section = 'SUBSTRUCTURE (GROUND TO DPC LEVEL)'
+    content = build_cached_workbook([('Budget', [
+        ['Section', section],
+        ['Building type', 'Semi-detached', None, None, 'Budget no', 2],
+        ['Building scope', 'SD 22-25', None, None, 'Multiplier', 4],
+        ['MATERIAL ONLY'],
+        ['S/N', 'MATERIALS', 'QTY', 'UNIT', 'RATE', 'AMOUNT', 'GROUP'],
+        [1, 'Cement', 2, 'bags', 10, '=C6*E6', 'General Materials'],
+        [2, 'Timber', 3, 'length', 20, '=C7*E7', 'Woods'],
+        ['LABOUR ONLY'],
+        ['S/N', 'LABOUR', 'QTY', 'UNIT', 'RATE', 'AMOUNT', 'GROUP'],
+        [1, 'Mason', 1, 'day', 50, '=C10*E10'],
+        ['GRAND TOTAL', None, None, None, None, '=SUM(F6:F7,F10)*F3'],
+    ]), ('Template options', [['Sections'], [section]])], {'Budget': {'F6':20, 'F7':60, 'F10':50, 'F11':520}})
+    parsed = parse_budget_workbook(content)
+    sheet = parsed.sheets[0]
+    assert (sheet.building_type, sheet.budget_number, sheet.budget_scope) == ('Semi-detached', 2, 'SD 22-25')
+    assert sheet.suggested_multiplier == 4 and sheet.source_total == 520
+    assert [item.grp for item in sheet.items] == ['General Materials', 'Woods', 'Labour']
+    assert [item.category for item in sheet.items] == ['Materials', 'Materials', 'Labour']
+    assert all(item.section == section and item.section_matched for item in sheet.items)
+    assert parsed.layouts[-1]['status'] == 'skipped'
 
 
 def test_parse_skips_non_item_sheets():
@@ -272,3 +301,111 @@ def test_parse_tracks_multiple_sections_per_sheet():
     assert [i.name for i in items] == ["PEGS", "PAINT"]
     assert items[0].section == "SUBSTRUCTURE (EXCAVATION TO DPC LEVEL)"
     assert items[1].section == "EXTERNAL PAINTING"
+
+
+def test_generic_sheet_name_and_reordered_columns():
+    parsed = parse_budget_workbook(_wb([('Sheet1', [
+        ['Budget prepared for site'],
+        ['Unit price (NGN)', 'Unit', 'Item Description', 'Quantity'],
+        ['₦1,250.00', 'bags', 'Cement', 3],
+    ])]))
+    item = parsed.sheets[0].items[0]
+    assert (item.name, item.qty, item.unit, item.unit_cost) == ('Cement', 3, 'bags', 1250)
+    assert parsed.layouts[0]['header_row'] == 2
+    assert parsed.layouts[0]['status'] == 'ready'
+
+
+def test_repeated_headers_can_have_different_column_orders():
+    parsed = parse_budget_workbook(_wb([('FLATS BGT 1', [
+        ['SUBSTRUCTURE (GROUND TO DPC LEVEL)'], ['MATERIAL ONLY'],
+        ['S/N', 'MATERIALS', 'UNIT', 'QTY', 'RATE'], [1, 'Cement', 'bags', 3, 1000],
+        ['EXTERNAL PAINTING'], ['MATERIAL ONLY'],
+        ['RATE', 'QTY', 'UNIT', 'DESCRIPTION'], [2000, 5, 'buckets', 'Paint'],
+    ])]))
+    cement, paint = parsed.sheets[0].items
+    assert (cement.qty, cement.unit, cement.unit_cost) == (3, 'bags', 1000)
+    assert (paint.qty, paint.unit, paint.unit_cost, paint.section) == (5, 'buckets', 2000, 'EXTERNAL PAINTING')
+
+
+def test_unknown_headers_can_be_mapped_manually():
+    content = _wb([('Data', [
+        ['Notes'], ['Product text', 'Count needed', 'Cost each', 'Measure'],
+        ['Cement', 4, 2500, 'bags'],
+    ])])
+    initial = parse_budget_workbook(content)
+    assert initial.sheets == []
+    assert initial.layouts[0]['status'] == 'needs_mapping'
+    parsed = parse_budget_workbook(content, {'Data': {
+        'header_row': 2, 'columns': {'name': 0, 'qty': 1, 'unit_cost': 2, 'unit': 3},
+    }})
+    item = parsed.sheets[0].items[0]
+    assert (item.qty, item.unit_cost, item.row_number) == (4, 2500, 3)
+    assert parsed.layouts[0]['is_manual'] is True
+
+
+def test_no_header_sheet_can_import_first_row():
+    content = _wb([('Data', [['Cement', 4, 2500], ['Sand', 6, 800]])])
+    parsed = parse_budget_workbook(content, {'Data': {'header_row': 0, 'columns': {'name': 0, 'qty': 1, 'unit_cost': 2}}})
+    assert [item.name for item in parsed.sheets[0].items] == ['Cement', 'Sand']
+    assert parsed.layouts[0]['header_row'] == 0
+
+
+def test_bad_numbers_and_uncached_formulas_require_correction():
+    parsed = parse_budget_workbook(_wb([('Sheet1', [
+        ['Description', 'Quantity', 'Rate'],
+        ['Cement', '3 bags', 'TBD'],
+        ['Sand', '=SUM(1,2)', 800],
+        ['Nails', -2, 150],
+        ['Paint', 0, 0],
+        ['Cement only'],
+    ])]))
+    items = parsed.sheets[0].items
+    assert len(items) == 5  # incomplete name-only rows remain visible
+    assert items[0].qty is None and items[0].unit_cost is None
+    assert len(items[0].errors) == 2
+    assert 'formula has no saved result' in items[1].errors[0]
+    assert items[2].qty is None
+    assert (items[3].qty, items[3].unit_cost, items[3].errors) == (0, 0, [])
+    assert items[4].qty is None
+
+
+def test_empty_unrecognized_and_excluded_sheets_are_reported():
+    content = _wb([('Empty', []), ('Notes', [['Something to review']]), ('Sheet2', [['Name', 'Qty', 'Rate'], ['Cement', 1, 2]])])
+    parsed = parse_budget_workbook(content, {'Notes': {'skip': True}})
+    layouts = {layout['sheet_name']: layout for layout in parsed.layouts}
+    assert layouts['Empty']['status'] == 'skipped'
+    assert layouts['Notes']['status'] == 'skipped'
+    assert 'excluded by you' in layouts['Notes']['warnings'][0]
+    assert layouts['Sheet2']['status'] == 'ready'
+
+
+def test_flat_template_header_after_title_and_sheet_names_are_unique():
+    rows = [['Title'], ['Building Type', 'Budget No', 'Group', 'Item Name', 'Qty', 'Rate'],
+            ['Flats', 1, 'Woods', 'Planks', 2, 3000]]
+    parsed = parse_budget_workbook(_wb([('First', rows), ('Second', rows)]))
+    assert len(parsed.sheets) == 2
+    assert len({sheet.sheet_name for sheet in parsed.sheets}) == 2
+    assert [sheet.items[0].qty for sheet in parsed.sheets] == [2, 2]
+
+
+def test_missing_name_rows_are_reported():
+    parsed = parse_budget_workbook(_wb([('Data', [['Name', 'Qty', 'Rate'], [None, 2, 3000]])]))
+    assert parsed.layouts[0]['status'] == 'needs_mapping'
+    assert any('Row 2 skipped' in warning for warning in parsed.layouts[0]['warnings'])
+
+
+def test_item_named_total_station_is_not_a_total_row():
+    parsed = parse_budget_workbook(_wb([('Data', [
+        ['Name', 'Qty', 'Rate'], ['Total station', 1, 500000], ['TOTAL', None, 500000],
+    ])]))
+    assert [item.name for item in parsed.sheets[0].items] == ['Total station']
+
+
+def test_later_header_missing_cost_does_not_reuse_previous_cost_column():
+    parsed = parse_budget_workbook(_wb([('Data', [
+        ['Name', 'Qty', 'Rate'], ['Cement', 1, 5000],
+        ['Description', 'Quantity', 'Unit'], ['Sand', 2, 'tons'],
+    ])]))
+    assert parsed.sheets[0].items[1].unit_cost is None
+    assert parsed.sheets[0].items[1].unit == 'tons'
+    assert any('later table header' in warning for warning in parsed.layouts[0]['warnings'])

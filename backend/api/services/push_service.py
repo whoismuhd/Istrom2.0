@@ -17,6 +17,7 @@ import os
 from typing import Optional
 
 from pywebpush import WebPushException, webpush
+from api.services.push_security import valid_push_endpoint, PushSession
 
 logger = logging.getLogger("istrom.push")
 
@@ -83,10 +84,14 @@ def send_push_for_notification(
     })
 
     db = SessionLocal()
+    push_session = PushSession()
     try:
         subs = db.query(PushSubscription).all()
         stale_ids = []
         for sub in subs:
+            if not valid_push_endpoint(sub.endpoint):
+                stale_ids.append(sub.id)
+                continue
             if not subscription_can_receive(
                 user_type=sub.user_type,
                 project_site=sub.project_site,
@@ -105,15 +110,17 @@ def send_push_for_notification(
                     vapid_private_key=VAPID_PRIVATE_KEY,
                     vapid_claims={"sub": VAPID_SUBJECT},
                     ttl=3600,
+                    timeout=10,
+                    requests_session=push_session,
                 )
             except WebPushException as exc:
                 status = getattr(getattr(exc, "response", None), "status_code", None)
                 if status in (404, 410):
                     stale_ids.append(sub.id)  # subscription expired/unsubscribed
                 else:
-                    logger.warning("push delivery failed (%s): %s", status, exc)
+                    logger.warning("push delivery failed (status %s)", status)
             except Exception as exc:  # never let push break the caller
-                logger.warning("push delivery error: %s", exc)
+                logger.warning("push delivery error (%s)", type(exc).__name__)
 
         if stale_ids:
             db.query(PushSubscription).filter(PushSubscription.id.in_(stale_ids)).delete(
@@ -121,4 +128,5 @@ def send_push_for_notification(
             )
             db.commit()
     finally:
+        push_session.close()
         db.close()

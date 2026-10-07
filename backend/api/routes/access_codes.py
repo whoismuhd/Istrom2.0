@@ -1,12 +1,13 @@
 """Access codes routes."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import AccessCode
+from models import AccessCode, PushSubscription
 from api.schemas import AccessCodeUpdate
 from api.dependencies import get_current_global_admin
 from api.services.auth_service import hash_access_code
+from api.services.notification_hub import notification_hub
 
 router = APIRouter(prefix="/access-codes", tags=["access-codes"])
 
@@ -25,6 +26,7 @@ def get_access_codes(db: Session = Depends(get_db), user: dict = Depends(get_cur
 @router.patch("")
 def update_access_codes(
     data: AccessCodeUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_global_admin),
 ):
@@ -38,6 +40,9 @@ def update_access_codes(
         db.add(ac)
     else:
         ac.admin_code = hash_access_code(code)
+        ac.session_version += 1
     ac.updated_by = user.get("username", "admin")
+    db.query(PushSubscription).filter(PushSubscription.is_global_admin == True).delete(synchronize_session=False)
     db.commit()
+    background_tasks.add_task(notification_hub.revoke_sessions, None)
     return {"ok": True}

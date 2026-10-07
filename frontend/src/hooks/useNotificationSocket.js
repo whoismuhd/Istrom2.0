@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { expireSession } from '../api';
 
 const WS_RECONNECT_BASE_MS = 1500;
 const WS_RECONNECT_MAX_MS = 15000;
 const WS_PING_INTERVAL_MS = 25000;
 const SOUND_THROTTLE_MS = 2000;
 
-function buildNotificationSocketUrl(token) {
+function buildNotificationSocketUrl() {
   const apiBase = import.meta.env.VITE_API_URL || '/api';
   const resolvedBase = apiBase.startsWith('http://') || apiBase.startsWith('https://')
     ? new URL(apiBase)
@@ -16,7 +17,7 @@ function buildNotificationSocketUrl(token) {
   const basePath = resolvedBase.pathname === '/' ? '' : resolvedBase.pathname.replace(/\/$/, '');
   const wsPath = `${basePath}/ws/notifications`;
 
-  return `${wsProtocol}//${resolvedBase.host}${wsPath}?token=${encodeURIComponent(token)}`;
+  return `${wsProtocol}//${resolvedBase.host}${wsPath}`;
 }
 
 function shouldRefreshForEvent(type) {
@@ -25,6 +26,7 @@ function shouldRefreshForEvent(type) {
     || type === 'notification_updated'
     || type === 'notification_deleted'
     || type === 'notifications_cleared'
+    || type === 'workspace_updated'
   );
 }
 
@@ -126,7 +128,9 @@ export default function useNotificationSocket() {
 
     const invalidateNotificationQueries = () => {
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard', 'notifications'] });
+      for (const key of ['dashboard', 'items', 'requests', 'actuals', 'deletedRequests']) {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
     };
 
     const scheduleReconnect = () => {
@@ -141,23 +145,30 @@ export default function useNotificationSocket() {
       clearTimers();
 
       try {
-        const socketUrl = buildNotificationSocketUrl(token);
+        const socketUrl = buildNotificationSocketUrl();
         const ws = new WebSocket(socketUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
-          reconnectAttemptRef.current = 0;
-          setIsLive(true);
-          pingTimerRef.current = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send('ping');
-            }
-          }, WS_PING_INTERVAL_MS);
+          if (closedByClient) {
+            ws.close(1000, 'client_shutdown');
+            return;
+          }
+          ws.send(JSON.stringify({ type: 'authenticate', token }));
         };
 
         ws.onmessage = (event) => {
+          if (closedByClient) return;
           try {
             const payload = JSON.parse(event.data);
+            if (payload?.type === 'connected') {
+              reconnectAttemptRef.current = 0;
+              setIsLive(true);
+              invalidateNotificationQueries();
+              pingTimerRef.current = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+              }, WS_PING_INTERVAL_MS);
+            }
             maybePlayAlertSound(payload?.type);
             if (shouldRefreshForEvent(payload?.type)) {
               invalidateNotificationQueries();
@@ -171,9 +182,16 @@ export default function useNotificationSocket() {
           ws.close();
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
+          if (closedByClient) return;
           setIsLive(false);
           clearTimers();
+          if (event.code === 1008) {
+            closedByClient = true;
+            queryClient.clear();
+            expireSession();
+            return;
+          }
           scheduleReconnect();
         };
       } catch {
@@ -199,6 +217,16 @@ export default function useNotificationSocket() {
       }
     };
   }, [queryClient]);
+
+  useEffect(() => {
+    if (isLive) return undefined;
+    const timer = setInterval(() => {
+      for (const key of ['dashboard', 'items', 'requests', 'actuals', 'deletedRequests']) {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [isLive, queryClient]);
 
   return { isLive };
 }

@@ -25,9 +25,13 @@ def list_deleted_requests(
 
 @router.delete("")
 def clear_deleted_logs(
+    project_site: str = Query(None),
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_global_admin),
 ):
-    db.query(DeletedRequest).delete()
+    q = db.query(DeletedRequest)
+    if project_site:
+        q = q.filter(DeletedRequest.project_site == project_site)
+    q.delete(synchronize_session=False)
     db.commit()
     return {"ok": True}
