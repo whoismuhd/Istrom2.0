@@ -61,8 +61,7 @@ def account_token(session, username, role='project_site', site=None):
     return login_response(make_account(session, username, role, site))['token']
 
 
-@pytest.fixture()
-def test_db():
+def isolated_engine(sqlite_url, **sqlite_options):
     postgres_url = os.getenv('ISTROM_TEST_POSTGRES_URL')
     if postgres_url:
         # Never let this destructive fixture target a hosted or application DB.
@@ -72,13 +71,26 @@ def test_db():
                 not (url.database or '').startswith('istrom_test_') or
                 set(url.query) & {'host', 'hostaddr', 'dbname', 'database', 'service'}):
             raise ValueError('PostgreSQL tests require a local database named istrom_test_*.')
-        engine = create_engine(url)
+        return create_engine(url)
     else:
-        engine = create_engine(
-            "sqlite://",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
+        return create_engine(sqlite_url, **sqlite_options)
+
+
+@pytest.fixture()
+def concurrent_db(tmp_path):
+    engine = isolated_engine(f"sqlite:///{tmp_path / 'concurrent.db'}",
+        connect_args={'check_same_thread': False, 'timeout': 10})
+    Base.metadata.create_all(engine)
+    try:
+        yield engine
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+@pytest.fixture()
+def test_db():
+    engine = isolated_engine('sqlite://', connect_args={'check_same_thread': False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestingSessionLocal()

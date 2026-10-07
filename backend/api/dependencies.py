@@ -143,10 +143,13 @@ def enforce_record_scope(user: dict, project_site: Optional[str]):
     return enforce_project_site_scope(user, project_site)
 
 
-def require_active_project_site(db: Session, user: dict, target_project_site: Optional[str]) -> str:
+def require_active_project_site(db: Session, user: dict, target_project_site: Optional[str], *, lock=False) -> str:
     site = enforce_project_site_scope(user, target_project_site)
     if not site:
         raise HTTPException(422, "Select a project site before adding records.")
+    if lock:
+        from api.services.project_records import lock_project_records
+        lock_project_records(db, site)
     if not db.query(ProjectSite.id).filter(ProjectSite.name == site, ProjectSite.is_active == True).first():
         raise HTTPException(422, "The selected project site is unknown or inactive.")
     return site

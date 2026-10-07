@@ -1,4 +1,5 @@
 import copy
+import pytest
 
 from models import Item, ProjectSite
 from tests.conftest import build_cached_workbook
@@ -95,6 +96,39 @@ def test_total_confirmation_multiplier_and_source_are_enforced(client, test_db):
         assert test_db.query(Item).count() == 0
 
 
+@pytest.mark.parametrize('unit_cost', [100.01, 99.99])
+def test_one_kobo_total_tolerance_uses_decimal_values(client, test_db, unit_cost):
+    from tests.conftest import build_workbook
+    test_db.add(ProjectSite(name='Decimal review site', is_active=True))
+    test_db.commit()
+    content = build_workbook([('Flats BGT 1', [
+        ['Description', 'Qty', 'Unit', 'Rate', 'Amount'],
+        ['Cement', 1, 'bags', unit_cost, 100],
+        ['GRAND TOTAL', None, None, None, 100],
+    ])])
+    result = client.post('/bulk-upload/analyze', data={'project_site': 'Decimal review site'},
+        files={'file': ('budget.xlsx', content)})
+    assert result.status_code == 200, result.text
+    body = result.json()
+    sheet, item = body['sheets'][0], body['sheets'][0]['items'][0]
+    row = {key: item[key] for key in ('name', 'qty', 'unit', 'unit_cost', 'category', 'grp', 'section', 'budget')}
+    row.update(source_qty=item['qty'], project_site='Decimal review site', building_type=sheet['building_type'],
+        budget_scope=sheet['budget_scope'], source_sheet=item['sheet_name'], source_row=item['row_number'],
+        import_sheet=sheet['sheet_name'])
+    payload = {'project_site': 'Decimal review site', 'rows': [row], 'preview_token': body['preview_token'],
+        'sheet_checks': [{'sheet_name': sheet['sheet_name'], 'multiplier': 1,
+            'budget_scope': sheet['budget_scope'], 'confirmed': True}]}
+    outside_tolerance = copy.deepcopy(payload)
+    outside_tolerance['rows'][0]['unit_cost'] = 100.011 if unit_cost > 100 else 99.989
+    rejected = client.post('/bulk-upload/commit', json=outside_tolerance)
+    assert rejected.status_code == 422
+    assert test_db.query(Item).count() == 0
+    accepted = client.post('/bulk-upload/commit', json=payload)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()['inserted_count'] == 1
+    assert test_db.query(Item).one().planned_unit_cost == unit_cost
+
+
 def test_amount_allowances_unused_rows_and_labour_headings():
     content = build_cached_workbook([('SD 1 BGT 2', [
         ['S/N', 'MATERIALS', 'QTY', None, 'RATE', 'AMOUNT'],
@@ -132,9 +166,14 @@ def test_missing_or_unreadable_control_does_not_become_zero(client, test_db):
     ])])
     result = client.post('/bulk-upload/analyze', data={'project_site': 'Review site'}, files={'file': ('budget.xlsx', data)})
     sheet = result.json()['sheets'][0]
-    # There is a formula but no saved total. Never present it as a valid zero.
-    assert sheet['source_total'] is None
-    assert sheet['total_unreadable'] is True
+    # A supported formula can be calculated without inventing a zero.
+    assert sheet['source_total'] == 10
+    assert sheet['total_unreadable'] is False
+    data = build_workbook([('SD 1 BGT 1', [
+        ['Name', 'Qty', 'Rate', 'Amount'], ['Cement', 1, 10, 10], ['GRAND TOTAL', None, None, '=UNKNOWN(D2)'],
+    ])])
+    result = client.post('/bulk-upload/analyze', data={'project_site': 'Review site'}, files={'file': ('budget.xlsx', data)})
+    assert result.json()['sheets'][0]['total_unreadable'] is True
 
 
 def test_preview_tokens_are_scoped_expire_and_cannot_be_used_to_sign_in(client, test_db):

@@ -1,14 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { numericImportValue, importRowIssues, mappingChanged, mappingPayload, importRowKey, sheetReconciliation } from './imports.js';
+import { numericImportValue, importRowIssues, importMappingIssues, importCategoryForGroup, mappingChanged, mappingPayload, importRowKey, sheetReconciliation } from './imports.js';
+
+test('Mapping supports priced quantities or line amounts and rejects ambiguous selections', () => {
+  assert.deepEqual(importMappingIssues({ name: 0, qty: 2, unit_cost: 4 }), []);
+  assert.deepEqual(importMappingIssues({ name: 0, amount: 4 }), []);
+  assert.deepEqual(importMappingIssues({ name: 0, qty: 2, amount: 4 }), []);
+  assert.equal(importMappingIssues({ name: 0, qty: 2 }).length, 1);
+  assert.equal(importMappingIssues({ amount: 4 }).length, 1);
+  assert.equal(importMappingIssues({ name: 0, qty: 0, unit_cost: 4 }).length, 1);
+});
 
 test('Invalid or blank import numbers require correction and zero remains valid', () => {
   for (const value of ['', null, undefined, 'bad', Infinity, -1]) assert.equal(numericImportValue(value), null);
   assert.equal(numericImportValue('0'), 0);
   assert.equal(numericImportValue('1.25'), 1.25);
-  const row = { building_type: 'Flats', budget: 'Budget 1', grp: 'Woods', category: 'Materials', qty: '', unit_cost: 100 };
+  const row = { name: 'Planks', unit: 'length', building_type: 'Flats', budget: 'Budget 1', grp: 'Woods', category: 'Materials', qty: '', unit_cost: 100 };
   assert.equal(importRowIssues(row).length, 1);
   assert.equal(importRowIssues({ ...row, qty: 0 }).length, 0);
+});
+
+test('Missing units cannot reach import and can be corrected without changing quantity or cost', () => {
+  const row = { name: 'Transport', unit: '', building_type: 'Flats', budget: 'Budget 1', grp: 'General Materials', category: 'Materials', qty: 1, unit_cost: 15000 };
+  assert.deepEqual(importRowIssues(row), ['Enter a unit up to 50 characters.']);
+  assert.deepEqual(importRowIssues({ ...row, unit: 'sum' }), []);
+  assert.equal(importRowIssues({ ...row, unit: 'sum', name: ' ' }).length, 1);
+  assert.equal(importRowIssues({ ...row, unit: 'x'.repeat(51) }).length, 1);
+});
+
+test('Changing a trade group keeps category consistent and preserves combined costs', () => {
+  assert.equal(importCategoryForGroup('Labour', 'Materials'), 'Labour');
+  assert.equal(importCategoryForGroup('Woods', 'Labour'), 'Materials');
+  assert.equal(importCategoryForGroup('Irons', 'Material/Labour'), 'Material/Labour');
 });
 test('Only manual, edited, or excluded sheets get mapping overrides', () => {
   const layout = { sheet_name: 'Data', status: 'ready', header_row: 2, is_manual: false, suggested_mapping: { name: 0, qty: 1, unit_cost: 2 } };
@@ -44,4 +67,26 @@ test('Automatically excluded hidden and summary sheets stay excluded until selec
   const draft = { skip: true, header_row: 2, columns: layout.suggested_mapping };
   assert.equal(mappingChanged(layout, draft), false);
   assert.equal(mappingChanged(layout, { ...draft, skip: false }), true);
+});
+
+test('Reconciliation accepts one kobo of source rounding without binary errors', () => {
+  const sheet = {source_total:100, items:[{sheet_name:'Budget', row_number:4}]};
+  const meta = {multiplier:1, budgetScope:'Block A', confirmed:true};
+  const review = sheetReconciliation(sheet, meta, {'Budget::4':{qty:1, unit_cost:100.01}});
+  assert.equal(review.difference, 0.01);
+  assert.equal(review.ready, true);
+  assert.equal(sheetReconciliation(sheet, meta, {'Budget::4':{qty:1, unit_cost:100.02}}).ready, false);
+});
+
+test('Large imports and fractional multipliers reconcile exactly', () => {
+  const items = Array.from({length:2000}, (_, index) => ({sheet_name:'Budget', row_number:index+1}));
+  const edits = Object.fromEntries(items.map((item) => [importRowKey(item), {qty:1, unit_cost:1_000_000_000.01}]));
+  const meta = {multiplier:1, confirmed:true};
+  const review = sheetReconciliation({source_total:2_000_000_000_020, items}, meta, edits);
+  assert.equal(review.total, 2_000_000_000_020);
+  assert.equal(review.ready, true);
+  const fractional = sheetReconciliation({source_total:0.006, items:[items[0]]}, {...meta, multiplier:0.2},
+    {[importRowKey(items[0])]:{qty:0.1, unit_cost:0.3}});
+  assert.equal(fractional.total, 0.006);
+  assert.equal(fractional.ready, true);
 });

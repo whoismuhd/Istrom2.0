@@ -77,7 +77,7 @@ export default function useNotificationSocket() {
   const hasAudioInteractionRef = useRef(false);
 
   useEffect(() => {
-    const token = localStorage.getItem('istrom_token');
+    const token = sessionStorage.getItem('istrom_token');
     if (!token) {
       return undefined;
     }
@@ -128,7 +128,7 @@ export default function useNotificationSocket() {
 
     const invalidateNotificationQueries = () => {
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      for (const key of ['dashboard', 'items', 'requests', 'actuals', 'deletedRequests']) {
+      for (const key of ['dashboard', 'items', 'requests', 'actuals', 'deletedRequests', 'projectSites', 'users', 'accessLogs']) {
         queryClient.invalidateQueries({ queryKey: [key] });
       }
     };
@@ -221,7 +221,7 @@ export default function useNotificationSocket() {
   useEffect(() => {
     if (isLive) return undefined;
     const timer = setInterval(() => {
-      for (const key of ['dashboard', 'items', 'requests', 'actuals', 'deletedRequests']) {
+      for (const key of ['dashboard', 'items', 'requests', 'actuals', 'deletedRequests', 'projectSites', 'users', 'accessLogs']) {
         queryClient.invalidateQueries({ queryKey: [key] });
       }
     }, 30000);

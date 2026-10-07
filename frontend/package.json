@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --test src/api.test.js src/utils/*.test.js"
+    "test": "node --test src/*.test.js src/utils/*.test.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.21",

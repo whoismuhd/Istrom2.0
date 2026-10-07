@@ -48,6 +48,19 @@ def test_commit_rejects_blank_unit_before_saving(client, test_db):
     assert test_db.query(Item).count() == 0
 
 
+def test_commit_rejects_overflowing_total_before_saving_any_rows(client, test_db):
+    _seed_site(test_db)
+    row = {'name': 'Cement', 'qty': 2, 'unit': 'bags', 'unit_cost': 10,
+           'category': 'Materials', 'budget': 'Budget 1', 'section': 'Concrete',
+           'building_type': 'Flats', 'project_site': 'Lifecamp Kafe'}
+    response = client.post('/bulk-upload/commit', json={
+        'project_site': 'Lifecamp Kafe', 'rows': [row, {**row, 'name': 'Overflow', 'qty': 1e200, 'unit_cost': 1e200}],
+    })
+    assert response.status_code == 422
+    assert 'Row 2' in response.json()['detail']
+    assert test_db.query(Item).count() == 0
+
+
 def test_preview_reports_oversized_text_even_when_every_row_is_invalid(client, test_db):
     import csv
     import io
@@ -245,8 +258,9 @@ def test_unreadable_numbers_are_visible_in_preview_and_rejected_on_commit(client
     result = client.post('/bulk-upload/analyze', data={'project_site': 'Lifecamp Kafe'}, files={'file': ('data.xlsx', content)})
     assert result.status_code == 200
     row = result.json()['sheets'][0]['items'][0]
-    assert row['qty'] is None and row['unit_cost'] is None
-    assert len(row['errors']) == 2
+    assert row['qty'] is None and row['unit_cost'] == 3
+    assert len(row['errors']) == 1
+    assert not row['excluded_by_default']
     payload = {'name': row['name'], 'qty': row['qty'], 'unit': 'bags', 'unit_cost': row['unit_cost'],
         'category': 'Materials', 'budget': 'Budget 1 - Flats(General Materials)', 'section': 'Concrete',
         'building_type': 'Flats', 'project_site': 'Lifecamp Kafe', 'grp': 'General Materials'}

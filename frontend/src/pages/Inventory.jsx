@@ -3,13 +3,13 @@ import EmptyState from '../components/EmptyState';
 import './Inventory.css';
 import ErrorMessage from '../components/ErrorMessage';
 import LoadError from '../components/LoadError';
-import { matchesBudget, plannedQuantity, plannedUnitCost, plannedAmount, budgetNumberOptions } from '../utils/budgets';
+import { matchesBudget, plannedQuantity, plannedUnitCost, plannedAmount, plannedTotal, budgetNumberOptions } from '../utils/budgets';
 import { useCallback, useState } from 'react';
 import Modal from '../components/Modal';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatNaira } from '../api';
-import { formatQuantity } from '../utils/inventory';
+import { formatQuantity, inventorySectionOptions } from '../utils/inventory';
 import { deleteInventoryItems } from '../utils/deletions';
 
 const PROPERTY_TYPES = ['', 'All', 'Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
@@ -35,8 +35,6 @@ export default function Inventory() {
   const params = {};
   const ps = getEffectiveProjectSite();
   if (ps) params.project_site = ps;
-  if (buildingType) params.building_type = buildingType;
-  if (section) params.section = section;
 
   const { data: rawItems = [], refetch: refetchItems, isFetching: itemsFetching, error: rawItemsError, isLoading: rawItemsLoading } = useQuery({
     queryKey: ['items', params],
@@ -45,7 +43,8 @@ export default function Inventory() {
     staleTime: 0,
   });
 
-  let items = rawItems.filter((i) => !budgetNum || matchesBudget(i.budget, budgetNum));
+  const buildingItems = rawItems.filter((item) => !buildingType || item.building_type === buildingType);
+  let items = buildingItems.filter((item) => (!section || item.section === section) && (!budgetNum || matchesBudget(item.budget, budgetNum)));
   if (budgetLabel) items = items.filter((i) => i.budget === budgetLabel);
   const searchTerm = search.trim().toLowerCase();
   if (searchTerm) items = items.filter((i) => `${i.name} ${i.code} ${i.budget_scope || ''}`.toLowerCase().includes(searchTerm));
@@ -54,12 +53,7 @@ export default function Inventory() {
     queryKey: ['constants'],
     queryFn: () => api.constants.get(),
   });
-  const sections = constants.CONSTRUCTION_SECTIONS || [];
-
-  const { refetch: refetchRequests } = useQuery({
-    queryKey: ['requests'],
-    queryFn: () => api.requests.list(),
-  });
+  const sections = inventorySectionOptions(rawItems, constants.CONSTRUCTION_SECTIONS || []);
 
   const deleteMutation = useMutation({
     mutationFn: (items) => deleteInventoryItems(items, api.items.delete),
@@ -83,7 +77,7 @@ export default function Inventory() {
   if (loadError) return <LoadError error={loadError} onRetry={() => { refetchItems(); retryConstants(); }} />;
   if (rawItemsLoading || constantsLoading) return <div className="card" role="status">Loading...</div>;
 
-  const totalValue = items.reduce((s, i) => s + plannedAmount(i), 0);
+  const totalValue = plannedTotal(items);
   const materialsCount = items.filter((i) => (i.category || i.grp || '').toLowerCase() !== 'labour').length;
   const labourCount = items.filter((i) => (i.category || i.grp || '').toLowerCase() === 'labour').length;
   const perPage = 50;
@@ -127,7 +121,7 @@ export default function Inventory() {
   return (
     <div className="inventory-page">
       <div className="page-heading">
-        <div><h1>Inventory</h1><p>Original quantities and costs for {ps || 'all project sites'}. Approved usage is tracked in Actuals.</p></div>
+        <div><h1>Inventory</h1><p>Original budget quantities and costs.</p></div>
         {isAdmin && <div className="page-heading-actions">
           <Link className="btn btn-secondary" to="/bulk-upload">Import workbook</Link>
           <Link className="btn btn-primary" to="/manual-entry">Add items</Link>
@@ -204,7 +198,7 @@ export default function Inventory() {
               onChange={(e) => { setBudgetLabel(e.target.value); setPage(0); }}
             >
               <option value="">All</option>
-              {[...new Set(rawItems.filter((i) => !budgetNum || matchesBudget(i.budget, budgetNum)).map((i) => i.budget).filter(Boolean))].sort().map((b) => (
+              {[...new Set(buildingItems.filter((i) => !budgetNum || matchesBudget(i.budget, budgetNum)).map((i) => i.budget).filter(Boolean))].sort().map((b) => (
                 <option key={b} value={b}>{b}</option>
               ))}
             </select>
@@ -228,7 +222,7 @@ export default function Inventory() {
               <button className="btn btn-danger btn-sm" disabled={deleteMutation.isPending} onClick={deleteSelected}>Delete selected</button>
               <button className="btn btn-secondary btn-sm" onClick={() => setSelected(new Set())}>Clear selection</button>
             </>}
-            <button className="btn btn-secondary btn-sm" onClick={() => { refetchItems(); refetchRequests(); }} disabled={itemsFetching}>
+            <button className="btn btn-secondary btn-sm" onClick={() => refetchItems()} disabled={itemsFetching}>
               {itemsFetching ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
@@ -250,7 +244,7 @@ export default function Inventory() {
             </thead>
             <tbody>
               {items.length === 0 && <tr className="table-empty-row"><td colSpan={isAdmin ? 8 : 6}>
-                <EmptyState title={hasFilters ? 'No matching items' : 'No inventory yet'} description={hasFilters ? 'Try another search or clear the filters to see more items.' : isAdmin ? 'Add your starting stock or import a workbook to begin tracking materials and costs.' : 'Your administrator will add the budget and inventory for this site.'}>
+                <EmptyState title={hasFilters ? 'No matching items' : 'No inventory yet'} description={hasFilters ? 'Change or clear the filters.' : isAdmin ? 'Add items or import a workbook.' : 'No inventory has been added for this site.'}>
                   {hasFilters ? <button className="btn btn-secondary" onClick={clearFilters}>Clear filters</button> : isAdmin && <Link className="btn btn-primary" to="/manual-entry">Add your first item</Link>}
                 </EmptyState>
               </td></tr>}
@@ -331,7 +325,7 @@ export default function Inventory() {
           <Modal onClose={() => { if (!updateMutation.isPending) closeEdit(); }} labelledBy="edit-inventory-title">
               <h3 id="edit-inventory-title">Edit {editItem.name}</h3>
               <ErrorMessage error={updateMutation.error} />
-              <p className="caption">Update the original budget quantities and costs. Remaining availability is managed in Actuals.</p>
+              <p className="caption">Changes update the original budget. Adjust availability in Actuals.</p>
               <div className="form-row">
                 <div className="form-group">
                   <label htmlFor="edit-planned">Original quantity</label>

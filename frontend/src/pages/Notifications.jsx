@@ -3,7 +3,7 @@ import ErrorMessage from '../components/ErrorMessage';
 import LoadError from '../components/LoadError';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, formatDate } from '../api';
-import { pushSupported, getPushSubscription, enablePush, disablePush } from '../push';
+import { pushSupported, deviceNotificationsEnabled, enablePush, disablePush } from '../push';
 import './Notifications.css';
 
 function getBadgeClass(type) {
@@ -22,7 +22,7 @@ export default function Notifications() {
 
   useEffect(() => {
     if (!pushSupported()) return;
-    getPushSubscription().then((sub) => setPushOn(!!sub)).catch(() => {});
+    deviceNotificationsEnabled().then(setPushOn).catch(() => {});
   }, []);
 
   const togglePush = async () => {
@@ -37,7 +37,7 @@ export default function Notifications() {
         const res = await enablePush();
         if (res.ok) {
           setPushOn(true);
-          setPushMsg('This device will now get notifications even when the app is closed.');
+          setPushMsg('Device notifications enabled.');
         } else {
           setPushMsg(res.reason || 'Could not enable notifications.');
         }
@@ -69,16 +69,13 @@ export default function Notifications() {
       <div className="card">
         <h1>Notifications</h1>
         <ErrorMessage error={markReadMutation.error} />
-        <p className="caption">View approvals, rejections, and submissions</p>
 
         {pushSupported() && (
           <div className="push-toggle-row">
             <button className="btn btn-secondary btn-sm" onClick={togglePush} disabled={pushBusy}>
               {pushBusy ? 'Working…' : pushOn ? 'Disable device notifications' : 'Enable device notifications'}
             </button>
-            <span className="push-toggle-hint">
-              {pushMsg || 'Get a phone/desktop notification for new activity even when the app is closed.'}
-            </span>
+            {pushMsg && <span className="push-toggle-hint" role="status">{pushMsg}</span>}
           </div>
         )}
 
@@ -109,12 +106,12 @@ export default function Notifications() {
                     )}
                     {n.budget && (
                       <span className="notification-detail notification-detail-budget">
-                        <strong>From Budget:</strong> {n.budget}
+                        <strong>Budget:</strong> {n.budget}
                       </span>
                     )}
                     {n.building_subtype && (
                       <span className="notification-detail">
-                        <strong>Building Type:</strong> {n.building_subtype}
+                        <strong>Building:</strong> {n.building_subtype}
                       </span>
                     )}
                   </div>

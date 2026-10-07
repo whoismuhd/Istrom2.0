@@ -1,10 +1,11 @@
 import LoadError from '../components/LoadError';
-import { matchesBudget, plannedAmount, toCSV, scopeTotals, budgetNumberOptions } from '../utils/budgets';
+import { matchesBudget, plannedTotal, toCSV, scopeTotals, budgetNumberOptions, buildingTypeLabel, budgetBuildingTypes } from '../utils/budgets';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatNaira } from '../api';
 import './BudgetSummary.css';
+import { downloadBlob } from '../utils/downloads';
 
 const BUILDING_TYPES = ['Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
 
@@ -45,28 +46,22 @@ export default function BudgetSummary() {
     : items.filter((i) => matchesBudget(i.budget, activeBudget));
 
   const byType = {};
-  for (const bt of BUILDING_TYPES) {
-    byType[bt] = budgetItems
-      .filter((i) => i.building_type === bt)
-      .reduce((s, i) => s + plannedAmount(i), 0);
+  const buildingTypes = budgetBuildingTypes(budgetItems, BUILDING_TYPES);
+  for (const bt of buildingTypes) {
+    byType[bt] = plannedTotal(budgetItems.filter((i) => buildingTypeLabel(i) === bt));
   }
 
-  const totalAmount = budgetItems.reduce((s, i) => s + plannedAmount(i), 0);
+  const totalAmount = plannedTotal(budgetItems);
 
   const downloadCSV = () => {
     const rows = [
       ['Building Type', 'Building scope', 'Project site', 'Planned amount'],
-      ...BUILDING_TYPES.flatMap((bt) => scopeTotals(budgetItems.filter((i) => i.building_type === bt)).map((s) => [bt, s.scope, s.projectSite, s.total])),
+      ...buildingTypes.flatMap((bt) => scopeTotals(budgetItems.filter((i) => buildingTypeLabel(i) === bt)).map((s) => [bt, s.scope, s.projectSite, s.total])),
       ['Total', '', '', totalAmount],
     ];
     const csv = toCSV(rows);
     const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `budget-summary-${activeBudget.replace(/\s/g, '-')}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `budget-summary-${activeBudget.replace(/\s/g, '-')}.csv`);
   };
 
   return (
@@ -75,7 +70,6 @@ export default function BudgetSummary() {
         <div className="budget-summary-header">
           <div>
             <h1>Budget summary</h1>
-            <p className="budget-summary-caption">Planned costs by budget and building type.</p>
           </div>
           <button className="btn btn-secondary" onClick={downloadCSV}>
             Export CSV
@@ -83,7 +77,7 @@ export default function BudgetSummary() {
         </div>
 
         <div className="budget-available-row">
-          <label className="budget-available-title" htmlFor="budget-select">Available Budgets</label>
+          <label className="budget-available-title" htmlFor="budget-select">Budget</label>
           <select
             id="budget-select"
             className="budget-dropdown"
@@ -98,26 +92,26 @@ export default function BudgetSummary() {
         </div>
 
         <div className="budget-detail-section">
-          <h3 className="budget-detail-title">{activeBudget === 'All' ? 'All Budgets' : activeBudget} Summary</h3>
+          <h3 className="budget-detail-title">{activeBudget === 'All' ? 'All budgets' : activeBudget}</h3>
           <div className="budget-total-amount">
             <span className="budget-total-label">
-              Total Amount for {activeBudget === 'All' ? 'All Budgets' : activeBudget}
+              Planned total
             </span>
             <span className="budget-total-value">{formatNaira(totalAmount)}</span>
           </div>
           <div className="budget-kpi-grid">
-            {BUILDING_TYPES.map((buildingType) => (
+            {buildingTypes.map((buildingType) => (
               <div key={buildingType} className="budget-kpi-card">
                 <span className="budget-kpi-label">{buildingType}</span>
                 <span className="budget-kpi-value">{formatNaira(byType[buildingType] || 0)}</span>
               </div>
             ))}
           </div>
-          <h4 className="budget-breakdown-title">Breakdown by Building Type</h4>
+          <h4 className="budget-breakdown-title">By building type</h4>
           <div className="budget-accordion">
-            {BUILDING_TYPES.map((buildingType) => {
+            {buildingTypes.map((buildingType) => {
               const total = byType[buildingType] || 0;
-              const scopes = scopeTotals(budgetItems.filter((i) => i.building_type === buildingType));
+              const scopes = scopeTotals(budgetItems.filter((i) => buildingTypeLabel(i) === buildingType));
               return (
                 <AccordionSection
                   key={buildingType}
@@ -144,16 +138,10 @@ export default function BudgetSummary() {
                       </tbody>
                     </table>
                   </div>
-                  <p className="budget-section-footer">
-                    {buildingType} Total - Planned: {formatNaira(total)}
-                  </p>
                 </AccordionSection>
               );
             })}
           </div>
-          <p className="budget-note">
-            Planned amounts cover each budget's recorded building scope.
-          </p>
         </div>
       </div>
     </div>

@@ -32,7 +32,7 @@ export default function AccountSetup() {
     finally { setPending(false); }
   };
 
-  return <AuthShell title="Set up your admin account" description="Enter your existing admin code to create your account.">
+  return <AuthShell title="Set up admin account">
     {status.error ? <LoadError error={status.error} onRetry={status.refetch} /> : <form className="login-form" onSubmit={submit}>
       <PasswordInput id="setup-code" label="Existing admin code" value={form.access_code} onChange={update('access_code')} autoComplete="off" required />
       <input type="hidden" name="username" autoComplete="username" value={ADMIN_USERNAME} />

@@ -39,6 +39,7 @@ from api.services.budget_workbook_parser import parse_budget_workbook, COLUMN_FI
 from api.services.import_template import build_import_template
 from api.services.budget_import_guard import sign_preview, validate_review, import_key
 from api.services.notification_hub import notification_hub
+from api.services.inventory_records import finite_cost_total
 
 router = APIRouter(prefix="/bulk-upload", tags=["bulk-upload"])
 
@@ -738,7 +739,7 @@ def commit_bulk_upload(
     site = _clean_str(payload.project_site)
     if not site:
         raise HTTPException(422, "project_site is required")
-    effective_site = require_active_project_site(db, user, site)
+    effective_site = require_active_project_site(db, user, site, lock=True)
     reviewed_keys = validate_review(payload, effective_site, user)
     previously_imported = {item.import_key: item for item in db.query(Item).filter(Item.project_site == effective_site, Item.import_key.is_not(None)).all()}
 
@@ -765,6 +766,7 @@ def commit_bulk_upload(
             raise HTTPException(422, f"Row {idx}: invalid building_type '{row.building_type}'")
         if row.qty < 0 or row.unit_cost < 0:
             raise HTTPException(422, f"Row {idx}: qty and unit_cost must be non-negative")
+        finite_cost_total(row.qty, row.unit_cost, f'Row {idx}: total cost')
         if not _clean_str(row.name):
             raise HTTPException(422, f"Row {idx}: name is required")
 

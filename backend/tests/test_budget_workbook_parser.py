@@ -252,7 +252,7 @@ def test_parse_recognizes_description_header_variant():
     assert first.qty == 50
     assert first.unit == "length"
     assert first.unit_cost == 2700
-    assert first.grp == "General Materials"
+    assert first.grp == "Woods"
 
 
 def test_group_mapping_spelling_and_combined_variants():
@@ -363,7 +363,8 @@ def test_bad_numbers_and_uncached_formulas_require_correction():
     assert len(items) == 5  # incomplete name-only rows remain visible
     assert items[0].qty is None and items[0].unit_cost is None
     assert len(items[0].errors) == 2
-    assert 'formula has no saved result' in items[1].errors[0]
+    assert items[1].qty == 3 and items[1].errors == []
+    assert any('calculated' in warning for warning in items[1].warnings)
     assert items[2].qty is None
     assert (items[3].qty, items[3].unit_cost, items[3].errors) == (0, 0, [])
     assert items[4].qty is None
@@ -390,8 +391,10 @@ def test_flat_template_header_after_title_and_sheet_names_are_unique():
 
 def test_missing_name_rows_are_reported():
     parsed = parse_budget_workbook(_wb([('Data', [['Name', 'Qty', 'Rate'], [None, 2, 3000]])]))
-    assert parsed.layouts[0]['status'] == 'needs_mapping'
-    assert any('Row 2 skipped' in warning for warning in parsed.layouts[0]['warnings'])
+    item = parsed.sheets[0].items[0]
+    assert item.name == '' and item.qty == 2 and item.unit_cost == 3000
+    assert not item.excluded_by_default
+    assert 'name is missing' in item.errors[0]
 
 
 def test_item_named_total_station_is_not_a_total_row():
@@ -409,3 +412,62 @@ def test_later_header_missing_cost_does_not_reuse_previous_cost_column():
     assert parsed.sheets[0].items[1].unit_cost is None
     assert parsed.sheets[0].items[1].unit == 'tons'
     assert any('later table header' in warning for warning in parsed.layouts[0]['warnings'])
+
+
+def test_unpriced_rows_do_not_hide_an_unnamed_unit_column():
+    parsed = parse_budget_workbook(_wb([('D1 BGT 2', [
+        ['MATERIALS ONLY'], ['S/N', 'MATERIALS', 'QTY', None, 'RATE', 'AMOUNT'],
+        [1, 'Cement', 117, 'bags', 11400, 1333800],
+        [2, 'D.P.M', 0, 'rolls', None, 0],
+        ['LABOUR ONLY'], ['S/N', 'LABOUR', 'QTY', None, 'RATE', 'AMOUNT'],
+        [1, 'Mason', 1, 'day', 5000, 5000],
+    ])]))
+    cement, unused, mason = parsed.sheets[0].items
+    assert parsed.layouts[0]['suggested_mapping']['unit'] == 3
+    assert (cement.unit, cement.qty, cement.unit_cost) == ('bags', 117, 11400)
+    assert unused.unit == 'rolls' and unused.excluded_by_default
+    assert (mason.unit, mason.category) == ('day', 'Labour')
+
+
+def test_trade_groups_are_detected_under_a_broad_materials_heading():
+    parsed = parse_budget_workbook(_wb([('SD 1 BGT 1', [
+        ['MATERIALS ONLY'], ['S/N', 'MATERIALS', 'QTY', 'UNIT', 'RATE'],
+        [1, 'Cement', 2, 'bags', 100], [2, 'PLANKS(1X12)', 3, 'length', 50],
+        [3, 'Y16MM', 4, 'length', 200], [4, "BOTTOM BEAM 9''", 2, 'length', 70],
+        [5, 'Concrete bottom beam', 2, 'm3', 500],
+        ['ELECTRICAL'], ['S/N', 'MATERIALS', 'QTY', 'UNIT', 'RATE'],
+        [1, 'PVC pipe', 1, 'length', 500],
+    ])]))
+    items = parsed.sheets[0].items
+    assert [item.grp for item in items] == ['General Materials', 'Woods', 'Irons', 'Woods', 'General Materials', 'Electrical']
+    assert items[1].budget == 'Budget 1 - Semi-detached(Woods)'
+    assert items[2].budget == 'Budget 1 - Semi-detached(Irons)'
+    assert all(item.category == 'Materials' for item in items)
+
+
+def test_a_materials_table_after_labour_does_not_keep_the_labour_category():
+    parsed = parse_budget_workbook(_wb([('FLATS BGT 1', [
+        ['Name', 'Qty', 'Unit', 'Rate'], ['Mason', 1, 'day', 100],
+        ['S/N', 'LABOUR', 'QTY', 'UNIT', 'RATE'], [1, 'Mason', 2, 'day', 200],
+        ['S/N', 'MATERIALS', 'QTY', 'UNIT', 'RATE'], [1, 'Cement', 3, 'bags', 300],
+    ])]))
+    assert (parsed.sheets[0].items[-1].grp, parsed.sheets[0].items[-1].category) == ('General Materials', 'Materials')
+
+
+def test_explicit_labour_heading_overrides_a_mislabeled_materials_column():
+    parsed = parse_budget_workbook(_wb([('SD 1 BGT 1', [
+        ['LABOUR ONLY'], ['S/N', 'LABOUR', 'QTY', 'UNIT', 'RATE'], [1, 'Mason', 1, 'day', 100],
+        ['LABOUR ONLY'], ['S/N', 'MATERIALS', 'QTY', 'UNIT', 'RATE'], [1, 'Trench excavation', 3, 'm3', 300],
+    ])]))
+    assert all((item.grp, item.category) == ('Labour', 'Labour') for item in parsed.sheets[0].items)
+
+
+def test_separate_building_scopes_have_distinct_preview_budgets():
+    parsed = parse_budget_workbook(_wb([('Data', [
+        ['Building Type', 'Budget No', 'Building scope', 'Group', 'Item Name', 'Qty', 'Unit', 'Rate'],
+        ['Flats', 1, 'Block A', 'General Materials', 'Cement', 2, 'bags', 100],
+        ['Flats', 1, 'Block B', 'General Materials', 'Cement', 3, 'bags', 200],
+    ])]))
+    assert len({sheet.sheet_name for sheet in parsed.sheets}) == 2
+    assert [sheet.budget_scope for sheet in parsed.sheets] == ['Block A', 'Block B']
+    assert [sheet.items[0].qty for sheet in parsed.sheets] == [2, 3]

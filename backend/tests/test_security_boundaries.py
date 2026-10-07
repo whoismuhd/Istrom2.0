@@ -39,6 +39,7 @@ def test_every_sensitive_resource_requires_login(client, identities):
     for path in ('/items', '/requests', '/actuals', '/notifications', '/project-sites', '/users',
                  '/access-logs', '/deleted-requests', '/auth/me', '/push/vapid-public-key'):
         assert client.get(path).status_code == 401, path
+    assert client.post('/push/subscription-status', json={'endpoint':'https://fcm.googleapis.com/test'}).status_code == 401
 
 
 def test_read_access_is_site_scoped_and_settings_global_only(client, test_db, identities):

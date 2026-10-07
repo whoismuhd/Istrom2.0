@@ -6,9 +6,14 @@ import { disablePush } from '../push';
 import { isGlobalAdministrator, readProjectSelection, saveProjectSelection, validateProjectSelection } from '../utils/workspace';
 
 function getStoredAuth() {
+  // Retire the old shared login; each tab now signs in independently.
+  try {
+    localStorage.removeItem('istrom_token');
+    localStorage.removeItem('istrom_user');
+  } catch { /* Browser storage may be restricted. */ }
   const emptyAuth = { user: null, projectSite: null };
-  const token = localStorage.getItem('istrom_token');
-  const stored = localStorage.getItem('istrom_user');
+  const token = sessionStorage.getItem('istrom_token');
+  const stored = sessionStorage.getItem('istrom_user');
   if (!token || !stored) return emptyAuth;
 
   try {
@@ -18,8 +23,8 @@ function getStoredAuth() {
       projectSite: readProjectSelection(user),
     };
   } catch {
-    localStorage.removeItem('istrom_token');
-    localStorage.removeItem('istrom_user');
+    sessionStorage.removeItem('istrom_token');
+    sessionStorage.removeItem('istrom_user');
     return emptyAuth;
   }
 }
@@ -33,42 +38,32 @@ export function AuthProvider({ children }) {
   const [sessionError, setSessionError] = useState(null);
   const [sessionAttempt, setSessionAttempt] = useState(0);
   useEffect(() => {
-    const refreshSharedSession = (event) => {
-      if (event.storageArea === localStorage && ['istrom_token', 'istrom_user', null].includes(event.key)) {
-        queryClient.clear();
-        window.location.reload();
-      }
-    };
-    window.addEventListener('storage', refreshSharedSession);
-    return () => window.removeEventListener('storage', refreshSharedSession);
-  }, [queryClient]);
-  useEffect(() => {
     if (!initialAuth.user) return;
     let active = true;
-    const startingToken = localStorage.getItem('istrom_token');
+    const startingToken = sessionStorage.getItem('istrom_token');
     api.auth.me().then(async (identity) => {
-      if (!active || localStorage.getItem('istrom_token') !== startingToken) return;
+      if (!active || sessionStorage.getItem('istrom_token') !== startingToken) return;
       if (!['admin', 'project_site'].includes(identity?.user_type)) {
         throw new Error('Could not verify your sign-in. Please try again.');
       }
       let selection = readProjectSelection(identity);
       if (isGlobalAdministrator(identity) && selection) {
         const sites = await api.projectSites.list({ redirectOnUnauthorized: false });
-        if (!active || localStorage.getItem('istrom_token') !== startingToken) return;
+        if (!active || sessionStorage.getItem('istrom_token') !== startingToken) return;
         if (!Array.isArray(sites)) throw new Error('Could not load your project sites. Please try again.');
         selection = validateProjectSelection(identity, sites);
       }
-      localStorage.setItem('istrom_user', JSON.stringify(identity));
+      sessionStorage.setItem('istrom_user', JSON.stringify(identity));
       setUser(identity);
       setProjectSiteState(selection);
       setSessionError(null);
     }).catch((error) => {
-      if (!active || localStorage.getItem('istrom_token') !== startingToken) return;
+      if (!active || sessionStorage.getItem('istrom_token') !== startingToken) return;
       setUser(null);
       if (error.status === 401 || error.status === 403) {
         queryClient.clear();
-        localStorage.removeItem('istrom_token');
-        localStorage.removeItem('istrom_user');
+        sessionStorage.removeItem('istrom_token');
+        sessionStorage.removeItem('istrom_user');
         setProjectSiteState(null);
         setSessionError(null);
       } else {
@@ -92,8 +87,8 @@ export function AuthProvider({ children }) {
   const acceptSession = (res) => {
     if (res.success && res.token) {
       queryClient.clear();
-      localStorage.setItem('istrom_token', res.token);
-      localStorage.setItem('istrom_user', JSON.stringify(res.user));
+      sessionStorage.setItem('istrom_token', res.token);
+      sessionStorage.setItem('istrom_user', JSON.stringify(res.user));
       setUser(res.user);
       setProjectSiteState(readProjectSelection(res.user));
       setSessionError(null);
@@ -109,8 +104,8 @@ export function AuthProvider({ children }) {
 
   const clearSession = () => {
     queryClient.clear();
-    localStorage.removeItem('istrom_token');
-    localStorage.removeItem('istrom_user');
+    sessionStorage.removeItem('istrom_token');
+    sessionStorage.removeItem('istrom_user');
     saveProjectSelection(user || initialAuth.user, null);
     setUser(null);
     setProjectSiteState(null);
@@ -120,7 +115,7 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     try {
-      await disablePush();
+      await disablePush({signingOut:true});
     } catch {
       // Local sign-out still completes if the subscription service is offline.
     }

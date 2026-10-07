@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatNaira } from '../api';
 import { BUILDING_SUBTYPE_OPTIONS, requestBuildingType } from '../utils/buildings';
+import { decimalProduct } from '../utils/numbers';
 
 const PROPERTY_TYPES = ['', 'All', 'Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
 
@@ -103,7 +104,7 @@ export default function MakeRequest() {
   const effectiveUnitCost = overrideUnitCost != null && !Number.isNaN(overrideUnitCost)
     ? overrideUnitCost
     : itemUnitCost;
-  const totalCost = Number(qty || 0) * Number(effectiveUnitCost || 0);
+  const totalCost = decimalProduct(Number(qty || 0), Number(effectiveUnitCost || 0));
   const showTotal = Boolean(itemId) && Number(qty) > 0;
 
   return (
@@ -116,7 +117,7 @@ export default function MakeRequest() {
         <fieldset className="form-fields" disabled={createMutation.isPending}>
         <div className="form-row">
           <div className="form-group">
-            <label htmlFor="makerequest-field-1">Budget Number</label>
+            <label htmlFor="makerequest-field-1">Budget number</label>
             <select id="makerequest-field-1"
               value={budgetNum}
               onChange={(e) => {
@@ -132,7 +133,7 @@ export default function MakeRequest() {
             </select>
           </div>
           <div className="form-group">
-            <label htmlFor="makerequest-field-2">Building Type</label>
+            <label htmlFor="makerequest-field-2">Building type</label>
             <select id="makerequest-field-2"
               value={buildingType}
               onChange={(e) => {
@@ -159,7 +160,7 @@ export default function MakeRequest() {
           </div>
           {needsSubtype && (
             <div className="form-group">
-              <label htmlFor="makerequest-field-4">Building Subtype</label>
+              <label htmlFor="makerequest-field-4">Building subtype</label>
               <select id="makerequest-field-4" value={buildingSubtype} onChange={(e) => setBuildingSubtype(e.target.value)} required>
                 <option value="">Select...</option>
                 {subtypeOptions.map((s) => (
@@ -214,7 +215,7 @@ export default function MakeRequest() {
           </div>
           {showTotal && (
             <div className="form-group">
-              <label htmlFor="makerequest-field-9">Estimated Total (₦)</label>
+              <label htmlFor="makerequest-field-9">Estimated total (₦)</label>
               <input id="makerequest-field-9"
                 value={formatNaira(totalCost)}
                 readOnly

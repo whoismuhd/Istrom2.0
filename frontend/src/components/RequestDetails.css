@@ -1,0 +1,12 @@
+.request-item-details { min-width: 190px; max-width: 300px; white-space: normal; }
+.request-item-details > strong { font-weight: 600; }
+.request-item-details > small { display: block; margin-top: .2rem; font-size: .74rem; color: var(--text-muted); }
+.request-item-details > .request-cost { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.request-item-details details { margin-top: .35rem; font-size: .76rem; }
+.request-item-details summary { color: var(--accent-blue); cursor: pointer; }
+.request-item-details dl { margin: .6rem 0; }
+.request-item-details dt { color: var(--text-muted); margin-top: .4rem; }
+.request-item-details dd { margin: .15rem 0 0; overflow-wrap: anywhere; }
+.request-item-details p { margin: .6rem 0 0; }
+.request-item-details p strong, .request-item-details p span { display: block; }
+.request-item-details p span { margin-top: .2rem; white-space: pre-wrap; overflow-wrap: anywhere; }

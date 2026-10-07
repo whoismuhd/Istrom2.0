@@ -27,7 +27,7 @@ export default function ChangePassword() {
     catch (err) { setError(err); }
     finally { setPending(false); }
   };
-  return <AuthShell title={user.must_change_password ? 'Choose your own password' : 'Change password'} description={user.must_change_password ? 'Replace your temporary password to continue.' : `Password for ${user.username}.`}>
+  return <AuthShell title={user.must_change_password ? 'Set your password' : 'Change password'} description={user.must_change_password ? 'Replace your temporary password to continue.' : undefined}>
     <form className="login-form" onSubmit={submit}>
       <input type="hidden" name="username" autoComplete="username" value={user.username} />
       <PasswordInput id="current-password" label={user.must_change_password ? 'Temporary password' : 'Current password'} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" maxLength={128} required />

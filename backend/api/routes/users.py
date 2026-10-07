@@ -47,7 +47,7 @@ def list_users(db: Session = Depends(get_db), admin: dict = Depends(get_current_
 
 
 @router.post('', response_model=ManagedUserOut)
-def create_user(data: UserCreate, db: Session = Depends(get_db), admin: dict = Depends(get_current_global_admin)):
+def create_user(data: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: dict = Depends(get_current_global_admin)):
     if data.user_type == 'admin':
         raise HTTPException(409, 'The app uses one fixed administrator account. Add site users here.')
     lock_account_changes(db)
@@ -62,6 +62,7 @@ def create_user(data: UserCreate, db: Session = Depends(get_db), admin: dict = D
         db.rollback()
         raise HTTPException(409, 'This username is already in use.')
     db.refresh(account)
+    background_tasks.add_task(notification_hub.broadcast_workspace_changed, None)
     return account
 
 
@@ -86,6 +87,8 @@ def update_user(user_id: int, data: UserUpdate, background_tasks: BackgroundTask
         _revoke(db, background_tasks, account)
     db.commit()
     db.refresh(account)
+    if changed:
+        background_tasks.add_task(notification_hub.broadcast_workspace_changed, None)
     return account
 
 
@@ -100,4 +103,5 @@ def reset_password(user_id: int, data: PasswordReset, background_tasks: Backgrou
     account.must_change_password = True
     _revoke(db, background_tasks, account)
     db.commit()
+    background_tasks.add_task(notification_hub.broadcast_workspace_changed, None)
     return {'ok': True}

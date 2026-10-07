@@ -9,6 +9,7 @@ from api.schemas import ActualCreate, ActualOut
 from api.dependencies import get_current_user, get_current_admin, enforce_project_site_scope, enforce_record_scope, require_active_project_site
 from api.services.notification_hub import notification_hub
 from api.services.inventory_records import lock_linked_item
+from api.services.project_records import lock_project_records
 
 router = APIRouter(prefix="/actuals", tags=["actuals"])
 
@@ -36,6 +37,7 @@ def create_actual(
     item = db.query(Item).filter(Item.id == data.item_id).first()
     if not item:
         raise HTTPException(404, "Item not found")
+    lock_project_records(db, item.project_site, item)
     lock_linked_item(db, item)
     requested_site = data.project_site or item.project_site or user.get("project_site")
     project_site = require_active_project_site(db, user, requested_site)
@@ -68,6 +70,7 @@ def delete_actual(
     a = db.query(Actual).filter(Actual.id == actual_id).first()
     if not a:
         raise HTTPException(404, "Actual not found")
+    lock_project_records(db, a.project_site, a)
     enforce_record_scope(user, a.project_site)
     if a.request_id is not None:
         raise HTTPException(409, "This actual is linked to an approved request. Reverse or delete the request to adjust stock and actuals together.")

@@ -14,7 +14,7 @@ export default function Login() {
   if (loading) return <div className="card" role="status">Loading...</div>;
   if (sessionError) return <LoadError error={sessionError} onRetry={retrySession} />;
   if (user) return <Navigate to="/" replace />;
-  return <AuthShell title="Sign in to your workspace" description="Choose your account type to continue.">
+  return <AuthShell title="Sign in">
     <div className="login-options">
       <Link className="login-option" to="/login/admin">
         <div><h2>Admin</h2><p>Manage projects, users and approvals.</p></div>
@@ -56,6 +56,6 @@ export function PortalLogin({ role }) {
     {admin && setup.data && !setup.data.setup_required && <p className="login-help"><Link to="/forgot-password">Forgot password?</Link></p>}
     {admin && setup.error && <p className="login-help" role="alert">Could not check account setup. <button type="button" className="btn btn-secondary btn-sm" onClick={() => setup.refetch()}>Retry</button></p>}
     <p className="login-help"><Link to="/login">Choose another account type</Link></p>
-    {!admin && <p className="login-help">For access or password resets, contact your administrator.</p>}
+    {!admin && <p className="login-help">Contact your administrator for access or a password reset.</p>}
   </AuthShell>;
 }

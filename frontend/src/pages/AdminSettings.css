@@ -469,8 +469,7 @@
   text-decoration: underline;
 }
 
-.admin-settings-title { font-size: 26px; line-height: 1.3; }
-.admin-settings-subtitle { font-size: 13px; font-weight: 400; margin: 7px 0 24px; }
+.admin-settings-title { font-size: 26px; line-height: 1.3; margin-bottom: 24px; }
 .admin-accordion-header:hover { background: var(--panel-soft); }
 .admin-metric-label { font-size: 12px; }
 .admin-metric-value { font-variant-numeric: tabular-nums; }

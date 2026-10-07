@@ -3,12 +3,15 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import exists
+from sqlalchemy.exc import IntegrityError
 
 from db import get_db
 from models import Item, Request, Actual
 from api.schemas import ItemCreate, ItemUpdate, ItemOut
 from api.dependencies import get_current_user, get_current_admin, enforce_project_site_scope, enforce_record_scope, require_active_project_site
 from api.services.notification_hub import notification_hub
+from api.services.inventory_records import finite_cost_total, lock_linked_item
+from api.services.project_records import lock_project_records
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -58,7 +61,8 @@ def create_item(
     user: dict = Depends(get_current_admin),
 ):
     requested_site = data.project_site or user.get("project_site")
-    project_site = require_active_project_site(db, user, requested_site)
+    project_site = require_active_project_site(db, user, requested_site, lock=True)
+    finite_cost_total(data.qty, data.unit_cost)
     item = Item(
         name=data.name,
         category=data.category,
@@ -93,7 +97,13 @@ def update_item(
     item = db.query(Item).filter(Item.id == item_id).first()
     if not item:
         raise HTTPException(404, "Item not found")
+    lock_project_records(db, item.project_site, item)
     enforce_record_scope(user, item.project_site)
+    finite_cost_total(data.qty if data.qty is not None else item.qty,
+                      data.unit_cost if data.unit_cost is not None else item.unit_cost)
+    finite_cost_total(data.planned_qty if data.planned_qty is not None else item.planned_qty,
+                      data.planned_unit_cost if data.planned_unit_cost is not None else item.planned_unit_cost,
+                      'Budget total')
     if data.expected_qty is not None:
         changes = data.model_dump(exclude_none=True, exclude={"expected_qty"})
         if changes:
@@ -129,7 +139,9 @@ def delete_item(
     item = db.query(Item).filter(Item.id == item_id).first()
     if not item:
         raise HTTPException(404, "Item not found")
+    lock_project_records(db, item.project_site, item)
     enforce_record_scope(user, item.project_site)
+    lock_linked_item(db, item)
     has_requests = db.query(Request.id).filter(Request.item_id == item_id).first()
     has_actuals = db.query(Actual.id).filter(Actual.item_id == item_id).first()
     if has_requests or has_actuals:
@@ -138,14 +150,19 @@ def delete_item(
             detail="Cannot delete item because it is linked to requests or actuals.",
         )
     site = item.project_site
-    removed = db.query(Item).filter(
-        Item.id == item_id,
-        ~exists().where(Request.item_id == item_id),
-        ~exists().where(Actual.item_id == item_id),
-    ).delete(synchronize_session=False)
+    try:
+        removed = db.query(Item).filter(
+            Item.id == item_id,
+            ~exists().where(Request.item_id == item_id),
+            ~exists().where(Actual.item_id == item_id),
+        ).delete(synchronize_session=False)
+        if removed:
+            db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, 'This item is linked to a request or actual. Refresh and review its records.') from exc
     if not removed:
         db.rollback()
         raise HTTPException(409, 'This item changed or was linked to a request or actual. Refresh and try again.')
-    db.commit()
     background_tasks.add_task(notification_hub.broadcast_workspace_changed, site)
     return {"ok": True}

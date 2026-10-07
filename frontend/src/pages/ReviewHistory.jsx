@@ -2,10 +2,12 @@ import { formatQuantity, requestAvailability } from '../utils/inventory.js';
 import EmptyState from '../components/EmptyState';
 import ErrorMessage from '../components/ErrorMessage';
 import LoadError from '../components/LoadError';
+import RequestDetails from '../components/RequestDetails';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatDate } from '../api';
+import './ReviewHistory.css';
 
 export default function ReviewHistory() {
   const { isAdmin, isGlobalAdmin, getEffectiveProjectSite } = useAuth();
@@ -120,7 +122,6 @@ export default function ReviewHistory() {
         <div className="review-header">
           <div>
             <h1>Request approvals</h1>
-            <p className="caption">Review requests and their approval history.</p>
           </div>
           <div className="form-group form-group-compact">
             <label htmlFor="reviewhistory-field-1">Status</label>
@@ -147,12 +148,12 @@ export default function ReviewHistory() {
                 <select id="reviewhistory-field-3" value={bulkAction} onChange={(e) => setBulkAction(e.target.value)}>
                   <option value="Approved">Approve</option>
                   <option value="Rejected">Reject</option>
-                  <option value="Pending">Set Pending</option>
+                  <option value="Pending">Set pending</option>
                 </select>
               </div>
 
             </div>
-            {bulkAction === 'Approved' && <p className="caption">Approvals record the full requested quantity, including any excess above availability.</p>}
+            {bulkAction === 'Approved' && <p className="caption">Approving also records any excess quantity.</p>}
             <button className="btn btn-primary" onClick={handleBulkSubmit} disabled={bulkPending || updateMutation.isPending}>
               {bulkPending ? 'Applying...' : 'Apply action'}
             </button>
@@ -169,7 +170,7 @@ export default function ReviewHistory() {
                 <th>Quantity / availability</th>
                 <th>Requester</th>
                 <th>Budget</th>
-                <th>Building Type</th>
+                <th>Building / subtype</th>
                 <th>Status</th>
                 {isAdmin && <th>Actions</th>}
               </tr>
@@ -177,7 +178,7 @@ export default function ReviewHistory() {
             <tbody>
               {filteredRequests.length === 0 ? (
                 <tr className="table-empty-row">
-                  <td colSpan={isAdmin ? 8 : 7}><EmptyState title="No requests match the current filter" description="Requests will appear here when they match this view." /></td>
+                  <td colSpan={isAdmin ? 8 : 7}><EmptyState title="No matching requests" /></td>
                 </tr>
               ) : filteredRequests.map((req) => {
                 const availability = requestAvailability(req.qty, req.available_qty);
@@ -187,7 +188,7 @@ export default function ReviewHistory() {
                 return (
                 <tr key={req.id} className={blocked || overQuantity || approvedOverQuantity ? 'request-shortage-row' : ''}>
                   <td>{req.id}</td>
-                  <td>{req.item_name || req.item_id}{req.item_budget_scope && <small className="scope-caption">{req.item_budget_scope}</small>}</td>
+                  <td><RequestDetails request={req} showProject={isGlobalAdmin && !params.project_site} /></td>
                   <td className="request-availability-cell">
                     <strong>{formatQuantity(req.qty)} {req.item_unit}</strong>
                     {req.status === 'Pending' && <small>Available: {availability.known ? `${formatQuantity(req.available_qty)} ${req.item_unit || ''}` : 'Item unavailable'}</small>}
@@ -197,7 +198,7 @@ export default function ReviewHistory() {
                   </td>
                   <td>{req.requested_by}</td>
                   <td>{req.budget}</td>
-                  <td>{req.building_subtype || '-'}</td>
+                  <td>{[req.item_building_type, req.building_subtype].filter(Boolean).join(' · ') || '—'}</td>
                   <td>{getStatusBadge(req.status)}</td>
                   {isAdmin && (
                     <td>
@@ -229,7 +230,6 @@ export default function ReviewHistory() {
           <div className="review-header review-header-spaced">
             <div>
               <h1>Site requests</h1>
-              <p className="caption">Pending, approved, and rejected requests</p>
             </div>
           </div>
         )}
@@ -274,25 +274,25 @@ export default function ReviewHistory() {
                   <th>Qty</th>
                   <th>Requester</th>
                   <th>Budget</th>
-                  <th>Building Type</th>
+                  <th>Building / subtype</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {pending.length === 0 ? (
                   <tr className="table-empty-row">
-                    <td colSpan={7}><EmptyState title="No pending requests" description="Requests will appear here when they match this view." /></td>
+                    <td colSpan={7}><EmptyState title="No pending requests" /></td>
                   </tr>
                 ) : pending.map((r) => (
                   <tr key={r.id}>
                     <td>{r.id}</td>
-                    <td>{r.item_name || r.item_id}{r.item_budget_scope && <small className="scope-caption">{r.item_budget_scope}</small>}</td>
+                    <td><RequestDetails request={r} /></td>
                     <td className="request-availability-cell">{formatQuantity(r.qty)} {r.item_unit}
                       {r.shortage_qty > 0 && <span className="shortage-label">Shortfall: {formatQuantity(r.shortage_qty)} {r.item_unit}</span>}
                     </td>
                     <td>{r.requested_by}</td>
                     <td>{r.budget || '-'}</td>
-                    <td>{r.building_subtype || '-'}</td>
+                    <td>{[r.item_building_type, r.building_subtype].filter(Boolean).join(' · ') || '—'}</td>
                     <td>{getStatusBadge(r.status)}</td>
                   </tr>
                 ))}
@@ -311,7 +311,7 @@ export default function ReviewHistory() {
                   <th>Qty</th>
                   <th>Requester</th>
                   <th>Budget</th>
-                  <th>Building Type</th>
+                  <th>Building / subtype</th>
                   <th>Status</th>
                   <th>Approved By</th>
                 </tr>
@@ -319,18 +319,18 @@ export default function ReviewHistory() {
               <tbody>
                 {approved.length === 0 ? (
                   <tr className="table-empty-row">
-                    <td colSpan={8}><EmptyState title="No approved requests" description="Requests will appear here when they match this view." /></td>
+                    <td colSpan={8}><EmptyState title="No approved requests" /></td>
                   </tr>
                 ) : approved.map((r) => (
                   <tr key={r.id} className={r.approved_shortage_qty > 0 ? 'request-shortage-row' : ''}>
                     <td>{r.id}</td>
-                    <td>{r.item_name || r.item_id}{r.item_budget_scope && <small className="scope-caption">{r.item_budget_scope}</small>}</td>
+                    <td><RequestDetails request={r} showProject={isGlobalAdmin && !params.project_site} /></td>
                     <td className="request-availability-cell">{formatQuantity(r.qty)} {r.item_unit}
                       {r.approved_shortage_qty > 0 && <span className="shortage-label">Approved over quantity: {formatQuantity(r.approved_shortage_qty)} {r.item_unit}</span>}
                     </td>
                     <td>{r.requested_by}</td>
                     <td>{r.budget || '-'}</td>
-                    <td>{r.building_subtype || '-'}</td>
+                    <td>{[r.item_building_type, r.building_subtype].filter(Boolean).join(' · ') || '—'}</td>
                     <td>{getStatusBadge(r.status)}</td>
                     <td>{r.approved_by}</td>
                   </tr>
@@ -350,23 +350,23 @@ export default function ReviewHistory() {
                   <th>Qty</th>
                   <th>Requester</th>
                   <th>Budget</th>
-                  <th>Building Type</th>
+                  <th>Building / subtype</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {rejected.length === 0 ? (
                   <tr className="table-empty-row">
-                    <td colSpan={7}><EmptyState title="No rejected requests" description="Requests will appear here when they match this view." /></td>
+                    <td colSpan={7}><EmptyState title="No rejected requests" /></td>
                   </tr>
                 ) : rejected.map((r) => (
                   <tr key={r.id}>
                     <td>{r.id}</td>
-                    <td>{r.item_name || r.item_id}{r.item_budget_scope && <small className="scope-caption">{r.item_budget_scope}</small>}</td>
+                    <td><RequestDetails request={r} showProject={isGlobalAdmin && !params.project_site} /></td>
                     <td>{r.qty}</td>
                     <td>{r.requested_by}</td>
                     <td>{r.budget || '-'}</td>
-                    <td>{r.building_subtype || '-'}</td>
+                    <td>{[r.item_building_type, r.building_subtype].filter(Boolean).join(' · ') || '—'}</td>
                     <td>{getStatusBadge(r.status)}</td>
                   </tr>
                 ))}
@@ -386,7 +386,7 @@ export default function ReviewHistory() {
                     <th>Qty</th>
                     <th>Requester</th>
                     <th>Budget</th>
-                    <th>Building Type</th>
+                    <th>Building subtype</th>
                     <th>Status</th>
                     <th>Deleted At</th>
                     <th>Deleted By</th>
@@ -395,7 +395,7 @@ export default function ReviewHistory() {
                 <tbody>
                   {deleted.length === 0 ? (
                     <tr className="table-empty-row">
-                      <td colSpan={9}><EmptyState title="No deleted requests" description="Requests will appear here when they match this view." /></td>
+                      <td colSpan={9}><EmptyState title="No deleted requests" /></td>
                     </tr>
                   ) : deleted.map((d) => (
                     <tr key={d.id}>

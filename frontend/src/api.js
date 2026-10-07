@@ -4,20 +4,27 @@ import { parseApiDate } from './utils/dates.js';
 const API_BASE = (import.meta.env?.VITE_API_URL || '/api').replace(/\/+$/, '');
 
 export function expireSession() {
-  localStorage.removeItem('istrom_token');
-  localStorage.removeItem('istrom_user');
+  sessionStorage.removeItem('istrom_token');
+  sessionStorage.removeItem('istrom_user');
   window.location.href = '/login';
 }
 
 function getToken() {
-  return localStorage.getItem('istrom_token');
+  return sessionStorage.getItem('istrom_token');
 }
 
-function getAuthHeaders() {
-  const token = getToken();
+function getAuthHeaders(token = getToken()) {
   const headers = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
   return headers;
+}
+
+function requireSameSession(token) {
+  if (token !== getToken()) {
+    const error = new Error('Your sign-in changed. Please try again.');
+    error.name = 'AbortError';
+    throw error;
+  }
 }
 
 function queryString(params = {}) {
@@ -39,25 +46,29 @@ function validationMessage(detail) {
 async function request(path, options = {}) {
   const { publicRequest = false, redirectOnUnauthorized = true, ...fetchOptions } = options;
   const url = `${API_BASE}${path}`;
+  const token = publicRequest ? null : getToken();
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const baseHeaders = isFormData
-    ? (publicRequest ? {} : getAuthHeaders())
-    : { 'Content-Type': 'application/json', ...(publicRequest ? {} : getAuthHeaders()) };
+    ? (publicRequest ? {} : getAuthHeaders(token))
+    : { 'Content-Type': 'application/json', ...(publicRequest ? {} : getAuthHeaders(token)) };
   const res = await fetch(url, {
     ...fetchOptions,
     headers: { ...baseHeaders, ...options.headers },
   });
-  const data = await res.json().catch(() => ({}));
+  let readable = true;
+  const data = await res.json().catch(() => { readable = false; return {}; });
+  if (!publicRequest) requireSameSession(token);
   if (res.status === 401 && redirectOnUnauthorized && !publicRequest && !['/auth/login', '/auth/setup'].includes(path)) {
     expireSession();
     throw new Error('Session expired');
   }
   if (!res.ok) {
-    const msg = Array.isArray(data.detail) ? data.detail.map(validationMessage).join('; ') : (data.detail || data.message || 'Request failed');
+    const msg = Array.isArray(data?.detail) ? data.detail.map(validationMessage).join('; ') : (data?.detail || data?.message || 'Request failed');
     const error = new Error(msg);
     error.status = res.status;
     throw error;
   }
+  if (!readable || data == null || typeof data !== 'object') throw new Error('The server returned an unreadable response. Please try again.');
   return data;
 }
 
@@ -65,8 +76,8 @@ export const api = {
   auth: {
     // AuthProvider handles initial expiry, keeping public recovery pages open.
     me: () => request('/auth/me', { redirectOnUnauthorized: false }),
-    setupStatus: () => request('/auth/setup-status'),
-    setup: (data) => request('/auth/setup', { method: 'POST', body: JSON.stringify(data) }),
+    setupStatus: () => request('/auth/setup-status', { publicRequest: true }),
+    setup: (data) => request('/auth/setup', { method: 'POST', body: JSON.stringify(data), publicRequest: true }),
     changePassword: (data) => request('/auth/password', { method: 'POST', body: JSON.stringify(data) }),
     requestAdminReset: () => request('/auth/admin-recovery/request', { method: 'POST', body: '{}', publicRequest: true }),
     resetAdminPassword: (data) => request('/auth/admin-recovery/reset', { method: 'POST', body: JSON.stringify(data), publicRequest: true }),
@@ -74,6 +85,7 @@ export const api = {
       request('/auth/login', {
         method: 'POST',
         body: JSON.stringify(credentials),
+        publicRequest: true,
       }),
   },
 
@@ -86,6 +98,7 @@ export const api = {
 
   push: {
     vapidPublicKey: () => request('/push/vapid-public-key'),
+    subscriptionStatus: (subscription) => request('/push/subscription-status', { method: 'POST', body: JSON.stringify(subscription) }),
     subscribe: (subscription) =>
       request('/push/subscribe', { method: 'POST', body: JSON.stringify(subscription) }),
     unsubscribe: (subscription) =>
@@ -141,13 +154,17 @@ export const api = {
       return request('/bulk-upload/preview', { method: 'POST', body: form });
     },
     downloadTemplate: async () => {
-      const res = await fetch(`${API_BASE}/bulk-upload/template.xlsx`, { headers: getAuthHeaders() });
+      const token = getToken();
+      const res = await fetch(`${API_BASE}/bulk-upload/template.xlsx`, { headers: getAuthHeaders(token) });
+      requireSameSession(token);
       if (res.status === 401) {
         expireSession();
         throw new Error('Session expired');
       }
       if (!res.ok) throw new Error('Could not download the template');
-      return res.blob();
+      const blob = await res.blob();
+      requireSameSession(token);
+      return blob;
     },
     analyze: ({ file, projectSite, mappings }) => {
       const form = new FormData();

@@ -17,6 +17,7 @@ import os
 from typing import Optional
 
 from pywebpush import WebPushException, webpush
+from sqlalchemy import and_, exists, or_
 from api.services.push_security import valid_push_endpoint, PushSession
 
 logger = logging.getLogger("istrom.push")
@@ -56,6 +57,24 @@ def subscription_can_receive(
     return False
 
 
+def _current_account_access():
+    """Require the saved device identity to still match an active account."""
+    from models import ProjectSite, PushSubscription, User
+
+    active_site = exists().where(ProjectSite.name == User.project_site,
+        ProjectSite.is_active == True).correlate(User)
+    same_site = or_(User.project_site == PushSubscription.project_site,
+        and_(User.project_site.is_(None), PushSubscription.project_site.is_(None)))
+    global_admin = and_(User.user_type == 'admin', User.project_site.is_(None))
+    return exists().where(
+        User.id == PushSubscription.user_id, User.is_active == True,
+        User.must_change_password == False, User.login_name.isnot(None), User.password_hash.isnot(None),
+        User.user_type == PushSubscription.user_type, same_site,
+        PushSubscription.is_global_admin == global_admin,
+        or_(global_admin, and_(User.user_type == 'project_site', active_site)),
+    ).correlate(PushSubscription)
+
+
 def send_push_for_notification(
     notification_id: int,
     notification_type: str,
@@ -86,9 +105,17 @@ def send_push_for_notification(
     db = SessionLocal()
     push_session = PushSession()
     try:
-        subs = db.query(PushSubscription).all()
+        subscription_ids = db.query(PushSubscription.id).order_by(PushSubscription.id).all()
         stale_ids = []
-        for sub in subs:
+        revoked_ids = []
+        for (subscription_id,) in subscription_ids:
+            # Check each recipient immediately before its delivery. An account
+            # can be disabled while earlier devices are waiting on push services.
+            sub = db.query(PushSubscription).filter(PushSubscription.id == subscription_id,
+                _current_account_access()).populate_existing().first()
+            if sub is None:
+                revoked_ids.append(subscription_id)
+                continue
             if not valid_push_endpoint(sub.endpoint):
                 stale_ids.append(sub.id)
                 continue
@@ -122,10 +149,16 @@ def send_push_for_notification(
             except Exception as exc:  # never let push break the caller
                 logger.warning("push delivery error (%s)", type(exc).__name__)
 
+        if revoked_ids:
+            # A device re-registered during delivery may now be valid. Prune
+            # only rows whose current owner still has no matching access.
+            db.query(PushSubscription).filter(PushSubscription.id.in_(revoked_ids),
+                ~_current_account_access()).delete(synchronize_session=False)
         if stale_ids:
             db.query(PushSubscription).filter(PushSubscription.id.in_(stale_ids)).delete(
                 synchronize_session=False
             )
+        if stale_ids or revoked_ids:
             db.commit()
     finally:
         push_session.close()

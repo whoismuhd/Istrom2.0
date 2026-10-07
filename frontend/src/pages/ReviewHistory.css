@@ -1,0 +1,3 @@
+.review-history-page .data-table th, .review-history-page .data-table td { padding-left: 10px; padding-right: 10px; }
+.review-history-page .table-actions { flex-direction: column; align-items: stretch; min-width: 108px; max-width: 128px; white-space: normal; }
+.review-history-page .table-actions .btn { white-space: normal; line-height: 1.3; }

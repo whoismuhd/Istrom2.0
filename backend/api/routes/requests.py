@@ -3,6 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from db import get_db
 from models import Request, Item, Notification, Actual, DeletedRequest
@@ -10,7 +11,8 @@ from api.schemas import RequestCreate, RequestStatusUpdate, RequestOut
 from api.dependencies import get_current_user, get_current_admin, enforce_project_site_scope, enforce_record_scope, require_active_project_site
 from api.services.notification_hub import notification_hub
 from api.services.push_service import send_push_for_notification
-from api.services.inventory_records import lock_linked_item
+from api.services.inventory_records import lock_linked_item, finite_cost_total, change_item_quantity
+from api.services.project_records import lock_project_records
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 ALLOWED_REQUEST_STATUSES = {"Pending", "Approved", "Rejected"}
@@ -48,13 +50,22 @@ def list_requests(
         q = q.filter(Request.status == status)
     if effective_site:
         q = q.filter(Request.project_site == effective_site)
-    rows = q.order_by(Request.created_at.desc()).all()
+    actual_totals = db.query(Actual.request_id, func.sum(Actual.actual_cost).label('cost')).filter(Actual.request_id.isnot(None))
+    if effective_site:
+        actual_totals = actual_totals.filter(Actual.project_site == effective_site)
+    actual_totals = actual_totals.group_by(Actual.request_id).subquery()
+    rows = q.outerjoin(Item, Item.id == Request.item_id).outerjoin(
+        actual_totals, actual_totals.c.request_id == Request.id,
+    ).add_entity(Item).add_columns(actual_totals.c.cost).order_by(Request.created_at.desc()).all()
     out = []
-    for r in rows:
-        item = db.query(Item).filter(Item.id == r.item_id).first()
+    for r, item, actual_cost in rows:
         d = RequestOut(
             id=r.id, ts=r.ts, section=r.section, item_id=r.item_id,
             item_unit=item.unit if item else None,
+            item_unit_cost=item.unit_cost if item else None,
+            item_building_type=item.building_type if item else None,
+            item_section=item.section if item else None,
+            actual_cost=actual_cost if r.status == 'Approved' else None,
             available_qty=max(0, item.qty) if item else None,
             shortage_qty=max(0, r.qty - max(0, item.qty)) if item and r.status == "Pending" else 0,
             approved_shortage_qty=r.approved_shortage_qty,
@@ -84,11 +95,13 @@ def create_request(
     item = db.query(Item).filter(Item.id == data.item_id).first()
     if not item:
         raise HTTPException(404, "Item not found")
+    lock_project_records(db, item.project_site, item)
     lock_linked_item(db, item)
     requested_site = data.project_site or item.project_site or user.get("project_site")
     project_site = require_active_project_site(db, user, requested_site)
     if item.project_site != project_site:
         raise HTTPException(403, "Item does not belong to selected project site")
+    finite_cost_total(data.qty, data.current_price if data.current_price is not None else item.unit_cost)
     requested_by = user.get("username") or "Unknown"
 
     req = Request(
@@ -154,6 +167,7 @@ def update_request_status(
     req = db.query(Request).filter(Request.id == req_id).first()
     if not req:
         raise HTTPException(404, "Request not found")
+    lock_project_records(db, req.project_site, req)
     enforce_record_scope(user, req.project_site)
 
     if data.status not in ALLOWED_REQUEST_STATUSES:
@@ -186,32 +200,28 @@ def update_request_status(
     # Revert inventory/actuals if an approved request is moved away from Approved
     if old_status == "Approved" and new_status != "Approved":
         if item:
-            db.query(Item).filter(Item.id == item.id).update(
-                {Item.qty: Item.qty + req.qty}, synchronize_session="fetch",
-            )
+            change_item_quantity(db, item, req.qty)
         db.query(Actual).filter(Actual.request_id == req.id).delete(synchronize_session=False)
 
     # Apply inventory/actuals if request is newly approved
     if old_status != "Approved" and new_status == "Approved":
         if item:
-            issued = db.query(Item).filter(Item.id == item.id).update(
-                {Item.qty: Item.qty - req.qty}, synchronize_session="fetch",
-            )
-            if not issued:
-                db.rollback()
-                raise HTTPException(409, "The linked inventory item is missing; this request cannot be approved.")
-            db.refresh(item)
-            # Use the balance after the atomic deduction, including any other
-            # committed approvals. Record only this request's uncovered amount.
-            available_before = item.qty + req.qty
-            req.approved_shortage_qty = max(0, req.qty - max(0, available_before))
+            change_item_quantity(db, item, -req.qty)
+            # The locked balance includes other committed approvals. The lesser
+            # of this issue and the resulting deficit is this request's excess.
+            req.approved_shortage_qty = min(req.qty, max(0, -item.qty))
 
-        cost = req.current_price if req.current_price is not None else (item.unit_cost if item else 0)
+        cost = req.current_price if req.current_price is not None else item.unit_cost
+        try:
+            approval_cost = finite_cost_total(req.qty, cost)
+        except HTTPException:
+            db.rollback()
+            raise
         actual = db.query(Actual).filter(Actual.request_id == req.id).first()
         if actual:
             actual.item_id = req.item_id
             actual.actual_qty = req.qty
-            actual.actual_cost = req.qty * cost
+            actual.actual_cost = approval_cost
             actual.actual_date = datetime.utcnow()
             actual.recorded_by = approved_by
             actual.building_subtype = req.building_subtype
@@ -221,7 +231,7 @@ def update_request_status(
                 item_id=req.item_id,
                 request_id=req.id,
                 actual_qty=req.qty,
-                actual_cost=req.qty * cost,
+                actual_cost=approval_cost,
                 actual_date=datetime.utcnow(),
                 recorded_by=approved_by,
                 building_subtype=req.building_subtype,
@@ -284,6 +294,7 @@ def delete_request(
     req = db.query(Request).filter(Request.id == req_id).first()
     if not req:
         raise HTTPException(404, "Request not found")
+    lock_project_records(db, req.project_site, req)
     enforce_record_scope(user, req.project_site)
     item = db.query(Item).filter(Item.id == req.item_id).first()
     item_name = item.name if item else "Unknown"
@@ -302,9 +313,7 @@ def delete_request(
     # If approved, remove the auto-created actual
     if req.status == "Approved":
         if item:
-            db.query(Item).filter(Item.id == item.id).update(
-                {Item.qty: Item.qty + req.qty}, synchronize_session="fetch",
-            )
+            change_item_quantity(db, item, req.qty)
         db.query(Actual).filter(Actual.request_id == req.id).delete(synchronize_session=False)
 
     budget = item.budget if item else None

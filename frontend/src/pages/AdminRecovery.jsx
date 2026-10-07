@@ -17,7 +17,7 @@ export function ForgotAdminPassword() {
     catch (err) { setError(err); }
     finally { setPending(false); }
   };
-  return <AuthShell title={sent ? 'Check your email' : 'Reset admin password'} description={sent ? 'If recovery is available, a reset link will be sent to the saved admin email. It expires in 15 minutes.' : 'Send a reset link to the saved admin email.'}>
+  return <AuthShell title={sent ? 'Check your email' : 'Reset admin password'} description={sent ? 'If recovery is configured, a reset link will arrive at the admin email. The link expires in 15 minutes.' : 'The reset link goes to the admin recovery email.'}>
     {!sent && <form className="login-form" onSubmit={submit}>
       <ErrorMessage error={error} />
       <button className="btn btn-primary btn-block" disabled={pending}>{pending ? 'Sending…' : 'Send reset link'}</button>

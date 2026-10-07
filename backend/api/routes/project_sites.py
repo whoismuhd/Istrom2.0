@@ -9,6 +9,8 @@ from models import ProjectSite, ProjectSiteAccessCode, Item, Request, Actual, No
 from api.schemas import ProjectSiteCreate, ProjectSiteUpdate, ProjectSiteOut
 from api.dependencies import get_current_global_admin
 from api.services.notification_hub import notification_hub
+from api.routes.auth import lock_account_changes
+from api.services.project_records import lock_project_records
 
 router = APIRouter(prefix="/project-sites", tags=["project-sites"])
 
@@ -43,14 +45,17 @@ def list_project_sites(db: Session = Depends(get_db), user: dict = Depends(get_c
 @router.post("", response_model=ProjectSiteOut)
 def create_project_site(
     data: ProjectSiteCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_global_admin),
 ):
+    lock_account_changes(db)
     name = _validate_site_name(db, data.name)
     ps = ProjectSite(name=name, description=data.description)
     db.add(ps)
     db.commit()
     db.refresh(ps)
+    background_tasks.add_task(notification_hub.broadcast_workspace_changed, None)
     return ps
 
 
@@ -62,9 +67,11 @@ def update_project_site(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_global_admin),
 ):
+    lock_account_changes(db)
     ps = db.query(ProjectSite).filter(ProjectSite.id == site_id).first()
     if not ps:
         raise HTTPException(404, "Project site not found")
+    lock_project_records(db, ps.name)
     old_name = ps.name
     if data.name is not None:
         ps.name = _validate_site_name(db, data.name, site_id)
@@ -87,6 +94,7 @@ def update_project_site(
         background_tasks.add_task(notification_hub.revoke_sessions, old_name)
     db.commit()
     db.refresh(ps)
+    background_tasks.add_task(notification_hub.broadcast_workspace_changed, None)
     return ps
 
 
@@ -97,9 +105,11 @@ def delete_project_site(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_global_admin),
 ):
+    lock_account_changes(db)
     ps = db.query(ProjectSite).filter(ProjectSite.id == site_id).first()
     if not ps:
         raise HTTPException(404, "Project site not found")
+    lock_project_records(db, ps.name)
     ps.is_active = False
     # End every assigned user's session and remove retired shared credentials.
     db.query(User).filter(User.project_site == ps.name).update(
@@ -110,4 +120,5 @@ def delete_project_site(
     db.query(PushSubscription).filter(PushSubscription.project_site == ps.name).delete(synchronize_session=False)
     db.commit()
     background_tasks.add_task(notification_hub.revoke_sessions, ps.name)
+    background_tasks.add_task(notification_hub.broadcast_workspace_changed, None)
     return {"ok": True}

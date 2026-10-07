@@ -133,11 +133,17 @@ export default function Layout() {
   const navigate = useNavigate();
   const { isLive: isNotificationsLive } = useNotificationSocket();
 
-  const { data: sites = [] } = useQuery({
+  const { data: sites = [], isSuccess: sitesLoaded, isFetching: sitesFetching } = useQuery({
     queryKey: ['projectSites'],
     queryFn: () => api.projectSites.list(),
     enabled: isGlobalAdmin,
   });
+
+  useEffect(() => {
+    if (isGlobalAdmin && sitesLoaded && !sitesFetching && projectSite && !sites.some((site) => site.name === projectSite)) {
+      setProjectSite(null);
+    }
+  }, [isGlobalAdmin, sitesLoaded, sitesFetching, projectSite, sites, setProjectSite]);
 
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications'],

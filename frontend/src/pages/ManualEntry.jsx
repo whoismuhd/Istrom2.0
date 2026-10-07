@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api } from '../api';
 import { formatNaira } from '../api';
+import { decimalProduct } from '../utils/numbers';
 
 const PROPERTY_TYPES = ['', 'Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
 
@@ -79,14 +80,13 @@ export default function ManualEntry() {
 
   const qtyNum = qty === '' ? 0 : parseFloat(qty) || 0;
   const unitCostNum = unitCost === '' ? 0 : parseFloat(unitCost) || 0;
-  const lineAmount = qtyNum * unitCostNum;
+  const lineAmount = decimalProduct(qtyNum, unitCostNum);
 
   return (
     <div className="card">
-      <h1>Add inventory items</h1>
+      <h1>Add items</h1>
       <ErrorMessage error={createMutation.error || formError} />
       {createMutation.isSuccess && <p className="request-confirmation" role="status">{createMutation.data.name} added to inventory.</p>}
-      <p className="caption">Record starting quantities, unit costs, and budget details.</p>
       {isAdmin && !getEffectiveProjectSite() && <div className="alert alert-warning">Select a project site in the header before adding an item.</div>}
 
       {!isAdmin && (
@@ -97,7 +97,7 @@ export default function ManualEntry() {
 
       <div className="form-row">
         <div className="form-group">
-          <label htmlFor="manualentry-field-1">Building Type</label>
+          <label htmlFor="manualentry-field-1">Building type</label>
           <select id="manualentry-field-1" value={buildingType} onChange={(e) => { setBuildingType(e.target.value); setBudgetLabel(''); }}>
             {PROPERTY_TYPES.map((t) => (
               <option key={t || 'all'} value={t}>
@@ -107,7 +107,7 @@ export default function ManualEntry() {
           </select>
         </div>
         <div className="form-group">
-          <label htmlFor="manualentry-field-2">Budget Number</label>
+          <label htmlFor="manualentry-field-2">Budget number</label>
           <select id="manualentry-field-2" value={budgetNum} onChange={(e) => { setBudgetNum(e.target.value); setBudgetLabel(''); }}>
             <option value="">All</option>
             {Array.from({ length: 20 }, (_, i) => (
@@ -129,7 +129,7 @@ export default function ManualEntry() {
           </select>
         </div>
         <div className="form-group">
-          <label htmlFor="manualentry-field-4">Budget Label</label>
+          <label htmlFor="manualentry-field-4">Budget</label>
           <select id="manualentry-field-4" value={budgetLabel} onChange={(e) => setBudgetLabel(e.target.value)}>
             <option value="">All</option>
             {budgetLabels.map((b) => (
@@ -145,7 +145,7 @@ export default function ManualEntry() {
         <form onSubmit={handleSubmit} className="add-item-form">
           <div className="form-row">
             <div className="form-group form-group-wide">
-              <label htmlFor="manualentry-field-5">Item Name</label>
+              <label htmlFor="manualentry-field-5">Item name</label>
               <input id="manualentry-field-5"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -180,7 +180,7 @@ export default function ManualEntry() {
               />
             </div>
             <div className="form-group">
-              <label htmlFor="manualentry-field-8">Unit Cost (₦)</label>
+              <label htmlFor="manualentry-field-8">Unit cost (₦)</label>
               <input id="manualentry-field-8"
                 type="number"
                 required
@@ -203,9 +203,9 @@ export default function ManualEntry() {
               </select>
             </div>
           </div>
-          <p className="line-amount">Line Amount: {formatNaira(lineAmount)}</p>
+          <p className="line-amount">Line amount: {formatNaira(lineAmount)}</p>
           <button type="submit" className="btn btn-primary" disabled={createMutation.isPending}>
-            {createMutation.isPending ? 'Adding...' : 'Add Item'}
+            {createMutation.isPending ? 'Adding…' : 'Add item'}
           </button>
         </form>
       )}

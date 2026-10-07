@@ -1,5 +1,5 @@
 /** Web Push client: service-worker registration + subscribe/unsubscribe. */
-import { api } from './api';
+import { api } from './api.js';
 
 export function pushSupported() {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -24,6 +24,13 @@ export async function getPushSubscription() {
   const reg = await navigator.serviceWorker.getRegistration('/');
   if (!reg) return null;
   return reg.pushManager.getSubscription();
+}
+
+export async function deviceNotificationsEnabled() {
+  const sub = await getPushSubscription();
+  if (!sub) return false;
+  const status = await api.push.subscriptionStatus({endpoint: sub.endpoint});
+  return status.enabled;
 }
 
 /**
@@ -51,12 +58,13 @@ export async function enablePush() {
   return { ok: true };
 }
 
-export async function disablePush() {
+export async function disablePush({ signingOut = false } = {}) {
   const sub = await getPushSubscription();
   if (sub) {
-    try {
-      await api.push.unsubscribe(sub.toJSON());
-    } finally {
+    await api.push.unsubscribe({...sub.toJSON(), ...(signingOut ? {current_account_only:true} : {})});
+    // Browser subscriptions are shared across tabs. Sign-out removes only this
+    // account's server registration; another tab can keep using the device.
+    if (!signingOut) {
       await sub.unsubscribe();
     }
   }

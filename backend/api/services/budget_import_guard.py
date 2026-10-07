@@ -2,6 +2,7 @@
 import hashlib
 import math
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, localcontext
 
 from fastapi import HTTPException
 from jose import JWTError, jwt
@@ -54,7 +55,9 @@ def validate_review(payload, site, user):
             raise HTTPException(422, 'The same source row was submitted more than once.')
         seen.add(key)
         keys[index] = key
-        grouped[row.import_sheet].append(row.qty * row.unit_cost)
+        with localcontext() as context:
+            context.prec = 40
+            grouped[row.import_sheet].append(Decimal(str(row.qty)) * Decimal(str(row.unit_cost)))
     for name, check in checks.items():
         source = manifest['sheets'].get(name)
         if not source or source['unreadable']:
@@ -64,10 +67,10 @@ def validate_review(payload, site, user):
         expected = source['total'] if source['total'] is not None else check.reviewed_total
         if expected is None:
             raise HTTPException(422, f'{name}: enter and confirm the reviewed total.')
-        try:
-            actual = math.fsum(grouped[name])
-        except OverflowError:
-            actual = float('inf')
-        if not math.isfinite(actual) or abs(actual - expected) > .01:
+        with localcontext() as context:
+            context.prec = 40
+            actual = sum(grouped[name], Decimal(0))
+            difference = abs(actual - Decimal(str(expected)))
+        if not actual.is_finite() or difference > Decimal('.01'):
             raise HTTPException(422, f'{name}: imported total differs from the reviewed budget. Correct the rows before importing.')
     return keys

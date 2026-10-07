@@ -239,14 +239,27 @@ decisions save the username alongside the account ID. Users are disabled
 rather than deleted, and the last active administrator cannot be removed.
 
 Refreshing keeps the current page and the administrator's selected project.
-Each browser tab remembers its own project for the signed-in account; sign-out
-clears that selection. Restored projects are checked against active sites.
+Sign-ins are stored per tab, so signing in or out in one tab does not change
+other tabs. Each tab remembers its own project for the signed-in account;
+sign-out clears that tab's selection. Restored projects are checked against active sites.
+Responses from a previous sign-in are discarded if the tab has switched accounts.
+The update clears the previous shared login; existing tabs need to sign in once.
+Password changes, account resets, and access revocations still invalidate all
+affected sessions on the server.
 Temporary connection failures show a retry button on the current page while
 keeping the saved sign-in. Expired or revoked access still requires signing in.
 
 Run checks with `.venv/bin/python -m pytest backend/tests`,
 `npm run test --prefix frontend`, `npm run lint --prefix frontend`, and
 `npm run build`. Backend route tests use an isolated database.
+
+Workbook import detects unnamed unit columns even when a table contains unused
+or unpriced lines. Broad materials headings allow trade groups such as Woods and
+Irons to be inferred; explicit trade and labour headings are preserved. Review
+these suggestions before saving. Item names and units can be corrected in the
+preview, and missing units block import. Separate building scopes in one table
+remain separate review budgets. Source total conflicts still require correction
+or excluding the affected budget; the importer does not adjust costs to hide them.
 
 ## Project Structure
 
@@ -289,6 +302,33 @@ even after stock arrives. Reversing an approval restores availability, clears
 its over-quantity marker, and removes its linked actual cost record.
 Building-block filters limit recorded usage and costs; remaining availability
 always refers to the site's shared inventory item.
+
+Approval rows show the project, building scope, estimated cost and building subtype.
+Open Details for the requested unit price, section, note and decision time.
+Approved history uses recorded Actuals costs, so later inventory price changes
+do not change the displayed approved cost. Inventory filters include custom
+sections from imported budgets. Item edits, imports, requests and approvals
+reject overflowing cost totals before saving them.
+Fractional approvals and reversals use decimal quantity arithmetic while holding
+the inventory lock. Currency comparisons use rounded kobo amounts; a balanced
+item displays "On budget". Simultaneous project changes share the account-change
+lock so duplicate names and assignment changes cannot bypass validation.
+Record writes lock their project before changing inventory or request records,
+so a concurrent rename keeps new imports and existing history under the same
+site. Project and user changes also refresh other open admin workspaces.
+Reports include custom and unassigned building types, and totals and exports
+use decimal sums.
+Import previews and commits also use decimal totals, including the one-kobo
+reconciliation tolerance. Incomplete Excel formulas require correction in the
+preview instead of causing a server error.
+
+Signing out removes only the current account's device notification registration.
+The browser subscription remains available to other tabs. The Notifications
+page checks whether the device is registered for the current account; enabling
+device notifications switches that device to the account in that tab.
+Device registration rechecks account access after concurrent account changes.
+Delivery checks current account and project access, skips revoked accounts,
+and removes their device registrations.
 
 Only site users submit requests. Administrators review and approve them, and
 the API enforces this separation. Notification read status belongs to each
@@ -342,21 +382,39 @@ does not certify package vulnerability coverage or deployment security.
 ## Importing Excel workbooks
 
 Use **Import Workbook** with a project site and an `.xlsx` file. The importer
-finds headings below title rows, accepts common names for columns, and reads
-columns in different orders. It checks every sheet, including `Sheet1` and
+finds headings below title rows, accepts common names for columns, reads split
+headers and columns in different orders, and follows repeated tables. Declared
+merged cells preserve building, budget, group, section and unit metadata. It
+checks every sheet, including `Sheet1` and
 `Sheet2`. Older `.xls` files must first be saved as `.xlsx`.
 
-For unfamiliar headings, expand the sheet under **Check sheet columns**. Choose
-the header row and columns for item name, quantity, and unit cost. Optional
+Choose **Upload & preview** to see an editable table immediately. Select a
+budget to review its rows, edit cells directly, and untick unwanted rows.
+Search and **Only rows needing fixes** help locate corrections; larger budgets
+show 50 rows per page. Building type, budget number, scope and quantity multiplier
+are editable above the table. Amounts and selected totals update as you edit.
+The final review checkbox confirms all selected budgets before import; editing
+again clears that confirmation. Missing fields and total differences block import.
+
+For unfamiliar headings, expand the sheet under **Column settings**. Choose
+the header row and columns for item name with quantity and unit cost, or with a
+line amount. Amount-only allowances use quantity 1; missing rates or quantities
+can be derived from numeric amounts, with a warning for review. Optional
 columns include unit, section, group, category, building type, and budget number.
 Use header row **0** for data without headings. Exclude notes or summary sheets
-that do not contain inventory, then choose **Update preview with these columns**.
+that do not contain inventory, then choose **Apply column settings**.
 This rebuilds the preview and resets any row corrections.
 
 Review building types, budget numbers, groups, and categories. Blank, negative,
 or unreadable quantities and prices stay empty and block import until corrected
-or excluded. Formula cells without a saved result are flagged; open and save the
-workbook in Excel to supply cached results, or enter the number in the preview.
+or excluded. Unnamed cost rows remain editable rather than being discarded.
+Currency prefixes/suffixes, grouped thousands and unambiguous decimal commas
+are read as numbers; arbitrary text is never stripped to invent a value.
+Simple arithmetic, percentages and SUM formulas without saved results are
+calculated with bounded references. Unsupported, external or circular formulas
+remain flagged; open and save the workbook in Excel, or enter the value in the
+preview. Duplicate column meanings require manual mapping. A recognized earlier
+table with incomplete headings blocks import so its costs are not omitted.
 Source warnings remain available beside each item. Zero is a valid value.
 
 Files can be up to 15 MB, with up to 50 sheets, 10,000 rows and 100 columns per

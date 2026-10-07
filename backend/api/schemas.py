@@ -204,6 +204,10 @@ class RequestStatusUpdate(BaseModel):
 class RequestOut(BaseModel):
     id: int
     item_unit: Optional[str] = None
+    item_unit_cost: Optional[float] = None
+    item_building_type: Optional[str] = None
+    item_section: Optional[str] = None
+    actual_cost: Optional[float] = None
     available_qty: Optional[float] = None
     shortage_qty: float = 0
     approved_shortage_qty: float = 0

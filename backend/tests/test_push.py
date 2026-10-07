@@ -10,13 +10,16 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-from models import PushSubscription  # noqa: E402
+from models import AccessCode, ProjectSite, PushSubscription  # noqa: E402
 from api.services.push_service import subscription_can_receive  # noqa: E402
 import api.routes.push as push_routes  # noqa: E402
 import api.services.push_service as push_service  # noqa: E402
-from api.dependencies import get_current_user
+from api.dependencies import get_current_user, validate_session
 from api.main import app
 from api.services.push_security import PushSession
+from api.services.user_accounts import login_response
+from fastapi import HTTPException
+from tests.conftest import make_account
 
 
 def _enable(monkeypatch, key="test-key"):
@@ -113,6 +116,146 @@ def test_unsubscribe_removes(client, test_db, monkeypatch):
     r = client.post("/push/unsubscribe", json={"endpoint": SUB["endpoint"]})
     assert r.status_code == 200
     assert test_db.query(PushSubscription).count() == 0
+
+
+def test_signout_preserves_another_tabs_device_notifications(client, test_db, monkeypatch):
+    _enable(monkeypatch)
+    assert client.post('/push/subscribe', json=SUB).status_code == 200
+    app.dependency_overrides[get_current_user] = lambda: dict(
+        user_id=99, user_type='project_site', project_site='Other', is_global_admin=False)
+    response = client.post('/push/unsubscribe', json={**SUB, 'current_account_only': True})
+    assert response.status_code == 200
+    assert response.json()['removed'] is False
+    assert test_db.query(PushSubscription).count() == 1
+    assert client.post('/push/subscription-status', json=SUB).json() == {'enabled':False}
+    app.dependency_overrides[get_current_user] = lambda: dict(user_type='admin', is_global_admin=True)
+    assert client.post('/push/subscription-status', json=SUB).json() == {'enabled':True}
+    response = client.post('/push/unsubscribe', json={**SUB, 'current_account_only': True})
+    assert response.json()['removed'] is True
+    assert test_db.query(PushSubscription).count() == 0
+
+
+@pytest.mark.parametrize('change', ['disabled', 'reassigned', 'session_changed', 'password_required', 'site_inactive'])
+def test_inflight_subscription_cannot_restore_a_revoked_account(test_db, monkeypatch, change):
+    _enable(monkeypatch)
+    test_db.add_all([AccessCode(admin_code='configured', user_code='unused'),
+                     ProjectSite(name='A'), ProjectSite(name='B')])
+    test_db.commit()
+    account = make_account(test_db, 'push-reviewer', site='A')
+    # Authentication completes before the administrator's account change.
+    identity = validate_session(login_response(account)['token'], test_db)
+    if change == 'disabled':
+        account.is_active = False
+    elif change == 'reassigned':
+        account.project_site = 'B'
+    elif change == 'session_changed':
+        account.session_version += 1
+    elif change == 'password_required':
+        account.must_change_password = True
+    else:
+        test_db.query(ProjectSite).filter_by(name='A').update({'is_active': False})
+    test_db.commit()
+    # An in-flight request must recheck that identity before saving the device.
+    with pytest.raises(HTTPException) as error:
+        push_routes.subscribe(push_routes.PushSubscribeIn(**SUB), test_db, identity)
+    assert error.value.status_code == 401
+    assert test_db.query(PushSubscription).count() == 0
+
+
+@pytest.mark.parametrize('change', ['disabled', 'reassigned', 'role_changed', 'password_required', 'site_inactive', 'legacy'])
+def test_delivery_prunes_subscriptions_without_current_account_access(test_db, monkeypatch, change):
+    _enable(monkeypatch)
+    test_db.add_all([ProjectSite(name='A'), ProjectSite(name='B')])
+    test_db.commit()
+    account = make_account(test_db, 'push-reviewer', site='A')
+    subscription = PushSubscription(**SUB['keys'], endpoint=SUB['endpoint'], user_id=account.id,
+        user_type='project_site', project_site='A', is_global_admin=False)
+    test_db.add(subscription)
+    if change == 'disabled':
+        account.is_active = False
+    elif change == 'reassigned':
+        account.project_site = 'B'
+    elif change == 'role_changed':
+        account.user_type, account.project_site = 'admin', None
+    elif change == 'password_required':
+        account.must_change_password = True
+    elif change == 'site_inactive':
+        test_db.query(ProjectSite).filter_by(name='A').update({'is_active': False})
+    else:
+        subscription.user_id = None
+    test_db.commit()
+    delivered = []
+    monkeypatch.setattr('db.SessionLocal', lambda: test_db)
+    monkeypatch.setattr(push_service, 'webpush', lambda **kwargs: delivered.append(kwargs))
+    push_service.send_push_for_notification(1, 'request_approved', 'A', 'Test', '')
+    assert delivered == []
+    assert test_db.query(PushSubscription).count() == 0
+
+
+@pytest.mark.parametrize('role', ['admin', 'project_site'])
+def test_current_accounts_can_subscribe_and_receive_their_notifications(test_db, monkeypatch, role):
+    _enable(monkeypatch)
+    test_db.add_all([AccessCode(admin_code='configured', user_code='unused'), ProjectSite(name='A')])
+    test_db.commit()
+    account = make_account(test_db, 'push-reviewer', role=role, site='A' if role == 'project_site' else None)
+    identity = validate_session(login_response(account)['token'], test_db)
+    assert push_routes.subscribe(push_routes.PushSubscribeIn(**SUB), test_db, identity) == {'ok': True}
+    delivered = []
+    monkeypatch.setattr('db.SessionLocal', lambda: test_db)
+    monkeypatch.setattr(push_service, 'webpush', lambda **kwargs: delivered.append(kwargs))
+    push_service.send_push_for_notification(1, 'request_approved', 'A', 'Test', '')
+    assert len(delivered) == 1
+    assert test_db.query(PushSubscription).count() == 1
+
+
+def test_delivery_rechecks_accounts_while_other_devices_are_sending(test_db, monkeypatch):
+    _enable(monkeypatch)
+    test_db.add(ProjectSite(name='A'))
+    test_db.commit()
+    first = make_account(test_db, 'first-reviewer', site='A')
+    second = make_account(test_db, 'second-reviewer', site='A')
+    for account in (first, second):
+        test_db.add(PushSubscription(**SUB['keys'], endpoint=SUB['endpoint'] + f'/{account.id}',
+            user_id=account.id, user_type='project_site', project_site='A', is_global_admin=False))
+    test_db.commit()
+    first_id = first.id
+    delivered = []
+
+    def send_and_disable_second(**kwargs):
+        delivered.append(kwargs)
+        second.is_active = False
+        test_db.commit()
+
+    monkeypatch.setattr('db.SessionLocal', lambda: test_db)
+    monkeypatch.setattr(push_service, 'webpush', send_and_disable_second)
+    push_service.send_push_for_notification(1, 'request_approved', 'A', 'Test', '')
+    assert len(delivered) == 1
+    assert test_db.query(PushSubscription).one().user_id == first_id
+
+
+def test_delivery_pruning_preserves_a_device_registered_to_a_current_account(test_db, monkeypatch):
+    _enable(monkeypatch)
+    test_db.add(ProjectSite(name='A'))
+    test_db.commit()
+    former = make_account(test_db, 'former-reviewer', site='A')
+    current = make_account(test_db, 'current-reviewer', site='A')
+    former.is_active = False
+    for account in (former, current):
+        test_db.add(PushSubscription(**SUB['keys'], endpoint=SUB['endpoint'] + f'/{account.id}',
+            user_id=account.id, user_type='project_site', project_site='A', is_global_admin=False))
+    test_db.commit()
+    stale_id = test_db.query(PushSubscription).filter_by(user_id=former.id).one().id
+    current_id = current.id
+
+    def register_device_to_current_account(**kwargs):
+        test_db.query(PushSubscription).filter_by(id=stale_id).update({'user_id': current_id})
+        test_db.commit()
+
+    monkeypatch.setattr('db.SessionLocal', lambda: test_db)
+    monkeypatch.setattr(push_service, 'webpush', register_device_to_current_account)
+    push_service.send_push_for_notification(1, 'request_approved', 'A', 'Test', '')
+    assert test_db.query(PushSubscription).count() == 2
+    assert test_db.query(PushSubscription).filter_by(id=stale_id).one().user_id == current_id
 
 
 def test_endpoints_503_when_not_configured(client, monkeypatch):

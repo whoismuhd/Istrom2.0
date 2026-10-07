@@ -1,3 +1,5 @@
+import { decimalDifference, decimalProduct, roundMoney, sumDecimals } from './numbers.js';
+
 /** Compare the budget number, rather than matching a prefix such as 1 in 10. */
 export function matchesBudget(label, selectedBudget) {
   if (!selectedBudget || selectedBudget === 'All') return true;
@@ -24,11 +26,27 @@ export function plannedUnitCost(item) {
 }
 
 export function plannedAmount(item) {
-  return plannedQuantity(item) * plannedUnitCost(item);
+  return decimalProduct(plannedQuantity(item), plannedUnitCost(item));
+}
+
+export function plannedTotal(items) {
+  return sumDecimals(items.map(plannedAmount));
+}
+
+export function buildingTypeLabel(item) {
+  return item.building_type?.trim() || 'Unassigned building';
+}
+
+export function budgetBuildingTypes(items, standardTypes = []) {
+  return [...new Set([...standardTypes, ...items.map(buildingTypeLabel)])];
+}
+
+export function budgetBalance(planned, actual) {
+  return decimalDifference(roundMoney(planned), roundMoney(actual));
 }
 
 export function budgetPosition(planned, actual) {
-  const balance = planned - actual;
+  const balance = budgetBalance(planned, actual);
   return { remainingBudget: Math.max(0, balance), overBudget: Math.max(0, -balance) };
 }
 
@@ -37,11 +55,11 @@ export function scopeTotals(items) {
   for (const item of items) {
     const scope = item.budget_scope || 'Site budget';
     const key = JSON.stringify([item.project_site || '', scope]);
-    const group = groups.get(key) || { scope, projectSite: item.project_site || '', total: 0 };
-    group.total += plannedAmount(item);
+    const group = groups.get(key) || { scope, projectSite: item.project_site || '', items: [] };
+    group.items.push(item);
     groups.set(key, group);
   }
-  return [...groups.values()];
+  return [...groups.values()].map(({items, ...group}) => ({...group, total:plannedTotal(items)}));
 }
 
 export function toCSV(rows) {

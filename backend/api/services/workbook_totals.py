@@ -3,6 +3,7 @@ import re
 from collections import Counter
 
 from openpyxl.utils.cell import range_boundaries, get_column_letter
+from api.services.workbook_numbers import budget_number
 
 REFERENCE = re.compile(r"^=?'((?:[^']|'')+)'!\$?([A-Z]{1,3})\$?(\d+)$", re.I)
 TOKEN = re.compile(r'\s*(SUM|\$?[A-Z]{1,3}\$?\d+|\d+(?:\.\d*)?|\.\d+|[()+*/,:%-])', re.I)
@@ -38,26 +39,35 @@ def _scale(value, factor):
     return value[0] * factor, {key: weight * factor for key, weight in value[1].items()}
 
 
-def trace_total(sheet, cell, leaves):
+def trace_total(sheet, cell, leaves, cells=None, cache=None, work_budget=None):
     """Return linear weights for amount cells. Reject unsupported formula syntax."""
-    cache, visiting = {}, set()
+    cache, visiting = cache if cache is not None else {}, set()
     # Read-only worksheets otherwise re-read XML for every cell reference.
-    cells = {f'{get_column_letter(col)}{row}': value for row, values in enumerate(sheet.iter_rows(values_only=True), 1)
-             for col, value in enumerate(values, 1) if value is not None}
+    if cells is None:
+        cells = {f'{get_column_letter(col)}{row}': value for row, values in enumerate(sheet.iter_rows(values_only=True), 1)
+                 for col, value in enumerate(values, 1) if value is not None}
 
-    def reference(address):
+    def reference(address, summed=False):
         address = address.replace('$', '').upper()
         if address in leaves:
             return 0, {address: 1}
         if address in cache:
             return cache[address]
+        value = cells.get(address)
+        # Excel SUM ignores text and booleans in referenced cells. Arithmetic
+        # references still require numeric values; spreadsheet errors propagate.
+        if summed and (isinstance(value, bool) or isinstance(value, str) and not value.startswith(('=', '#'))):
+            return 0, {}
+        if work_budget is not None:
+            work_budget[0] -= 1
+            if work_budget[0] < 0:
+                raise ValueError('Workbook formulas need calculation in Excel before import.')
         if address in visiting or len(visiting) > 80 or len(cache) > 50000:
             raise ValueError('Circular or overly complex total formula.')
         col, row, _, _ = range_boundaries(address)
         if col > 100 or row > 10000:
             raise ValueError('Total references a cell outside the supported range.')
         visiting.add(address)
-        value = cells.get(address)
         if isinstance(value, str) and value.startswith('='):
             result = formula(value[1:])
         elif value is None or isinstance(value, str) and not value.strip():
@@ -71,6 +81,8 @@ def trace_total(sheet, cell, leaves):
         return result
 
     def formula(text):
+        if len(text) > 4096:
+            raise ValueError('Total formula is too long.')
         tokens, pos = [], 0
         while pos < len(text):
             match = TOKEN.match(text, pos)
@@ -103,16 +115,21 @@ def trace_total(sheet, cell, leaves):
                 take('(')
                 value = (0, {})
                 while True:
+                    if index >= len(tokens):
+                        raise ValueError('Incomplete total formula.')
                     if index + 1 < len(tokens) and tokens[index + 1] == ':':
                         start = take().replace('$', '')
                         take(':')
                         end = take().replace('$', '')
                         c1, r1, c2, r2 = range_boundaries(f'{start}:{end}')
+                        c1, c2 = sorted((c1, c2)); r1, r2 = sorted((r1, r2))
                         if c2 > 100 or r2 > 10000 or (c2-c1+1)*(r2-r1+1) > 50000:
                             raise ValueError('Total range is too large.')
                         for row_number in range(r1, r2 + 1):
                             for column in range(c1, c2 + 1):
-                                value = _combine(value, reference(f'{get_column_letter(column)}{row_number}'))
+                                value = _combine(value, reference(f'{get_column_letter(column)}{row_number}', summed=True))
+                    elif re.fullmatch(r'\$?[A-Z]+\$?\d+', tokens[index]) and index + 1 < len(tokens) and tokens[index + 1] in (',', ')'):
+                        value = _combine(value, reference(take(), summed=True))
                     else:
                         value = _combine(value, expression())
                     if index < len(tokens) and tokens[index] == ',':
@@ -125,15 +142,18 @@ def trace_total(sheet, cell, leaves):
                 return reference(token)
             return float(token), {}
 
-        def product():
-            nonlocal index
+        def factor():
             value = atom()
             if index < len(tokens) and tokens[index] == '%':
                 take('%')
                 value = _scale(value, .01)
+            return value
+
+        def product():
+            value = factor()
             while index < len(tokens) and tokens[index] in ('*', '/'):
                 operator = take()
-                right = atom()
+                right = factor()
                 if operator == '/' and right[1] or operator == '*' and value[1] and right[1]:
                     raise ValueError('Total formula multiplies two calculated amounts.')
                 if operator == '/' and right[0] == 0:
@@ -159,18 +179,18 @@ def trace_total(sheet, cell, leaves):
     return reference(cell)
 
 
-def apply_sheet_control(parsed, values, formulas, control=None):
+def apply_sheet_control(parsed, values, formulas, control=None, calculate=None):
     if not control:
         # Prefer an explicit grand total. A section subtotal is not a sheet total.
         candidates = []
-        for row in values.iter_rows():
+        for row_number, row in enumerate(values.iter_rows(), 1):
             label = ' '.join(str(c.value).strip() for c in row if isinstance(c.value, str) and c.data_type != 'e')
             if re.search(r'grand\s+total|total\s+budgeted\s+amount|(?:^|\s)for\s+\d+\s+(?:blocks?|units?)', label, re.I):
-                amounts = [c for c in row if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)]
+                amounts = [c for c in row if budget_number(c.value) is not None]
                 if amounts:
                     candidates.append({'cell': amounts[-1].coordinate, 'summary_label': '', 'summary_cell': ''})
                 else:
-                    formula_cells = [c for c in formulas[row[0].row] if c.data_type == 'f']
+                    formula_cells = [c for c in formulas[row_number] if c.data_type == 'f']
                     if formula_cells:
                         candidates.append({'cell': formula_cells[-1].coordinate, 'summary_label': '', 'summary_cell': ''})
         control = candidates[-1] if candidates else None
@@ -178,13 +198,17 @@ def apply_sheet_control(parsed, values, formulas, control=None):
         parsed.warnings.append('No sheet total was found. Confirm the reviewed total before importing.')
         return
     coordinate = control['cell']
-    total = values[coordinate].value
+    total = budget_number(values[coordinate].value)
+    if total is None and calculate is not None:
+        total = calculate(coordinate)
+        if total is not None:
+            parsed.warnings.append('Sheet total calculated from a supported Excel formula without a saved result. Verify the total before import.')
     parsed.source_total_cell = coordinate
     parsed.source_total_formula = str(formulas[coordinate].value or '')
     row = values[coordinate].row
     parsed.source_total_label = ' '.join(str(c.value).strip() for c in values[row] if isinstance(c.value, str) and c.data_type != 'e')
     parsed.summary_label = control['summary_label']
-    if not isinstance(total, (int, float)) or isinstance(total, bool) or total < 0:
+    if total is None:
         parsed.warnings.append(f'{coordinate}: the sheet total has no readable saved result. Correct and save the workbook in Excel.')
         parsed.total_unreadable = True
         return
@@ -210,7 +234,10 @@ def apply_sheet_control(parsed, values, formulas, control=None):
             parsed.suggested_multiplier = multiplier
             parsed.multiplier_evidence = f'{coordinate}: {parsed.source_total_formula}'
             for item in parsed.items:
-                if item.amount_cell and not weights.get(item.amount_cell, 0):
+                if item.source_amount_missing and weights.get(item.amount_cell, 0) and item.qty is not None and item.unit_cost is not None and item.qty * item.unit_cost > 0:
+                    item.excluded_by_default = True
+                    item.warnings.append(f'Excluded: the budget formula at {coordinate} uses a source amount with no numeric value for this line. Verify whether it should be included.')
+                elif item.amount_cell and not weights.get(item.amount_cell, 0):
                     item.excluded_by_default = True
                     item.warnings.append(f'Excluded: this line is outside the budget formula at {coordinate}.')
         counts = []

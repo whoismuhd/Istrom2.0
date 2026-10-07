@@ -4,21 +4,23 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import { formatQuantity, summarizeActuals } from '../utils/inventory.js';
 import LoadError from '../components/LoadError';
-import { matchesBudget, plannedQuantity, plannedUnitCost, plannedAmount, budgetPosition, toCSV, budgetNumberOptions } from '../utils/budgets';
+import { matchesBudget, plannedQuantity, plannedUnitCost, plannedAmount, plannedTotal, budgetPosition, toCSV, budgetNumberOptions } from '../utils/budgets';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
 import { api, formatNaira } from '../api';
 import './Actuals.css';
 import { actualBuildingSubtypes } from '../utils/buildings';
+import { decimalDifference, sumDecimals } from '../utils/numbers';
+import { downloadBlob } from '../utils/downloads';
 
 const PROPERTY_TYPES = ['', 'All', 'Flats', 'Terraces', 'Semi-detached', 'Fully-detached'];
 
 const BUILDING_SUBTYPE_LABELS = {
-  Flats: 'Select Block',
-  Terraces: 'Select Terrace Cluster',
-  'Semi-detached': 'Select Semi-detached Unit',
-  'Fully-detached': 'Select Fully-detached Plot',
+  Flats: 'Block',
+  Terraces: 'Terrace cluster',
+  'Semi-detached': 'Unit',
+  'Fully-detached': 'Plot',
 };
 
 export default function Actuals() {
@@ -84,11 +86,8 @@ export default function Actuals() {
     byCategory[cat].push(item);
   }
 
-  const totals = filteredItems.reduce((summary, item) => {
-    summary.planned += plannedAmount(item);
-    summary.actual += summarizeActuals(item, actualsByItem[item.id] || []).cost;
-    return summary;
-  }, { planned: 0, actual: 0 });
+  const totals = {planned:plannedTotal(filteredItems),
+    actual:sumDecimals(filteredItems.map((item) => summarizeActuals(item, actualsByItem[item.id] || []).cost))};
   const totalBudget = budgetPosition(totals.planned, totals.actual);
   const rowsFor = (item) => summarizeActuals(item, actualsByItem[item.id] || []);
   const exportCSV = () => {
@@ -98,18 +97,13 @@ export default function Actuals() {
       const position = budgetPosition(plannedAmount(item), record.cost);
       rows.push([item.name, item.code, item.unit, plannedQuantity(item), record.used, Math.max(0, record.remaining), Math.max(0, -record.remaining), plannedUnitCost(item), record.averageUnitCost, plannedAmount(item), record.cost, position.remainingBudget, position.overBudget, item.project_site]);
     }
-    const url = URL.createObjectURL(new Blob(['\uFEFF', toCSV(rows)], { type: 'text/csv;charset=utf-8' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'istrom-actuals.csv';
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(new Blob(['\uFEFF', toCSV(rows)], { type: 'text/csv;charset=utf-8' }), 'istrom-actuals.csv');
   };
   const adjustmentValid = adjustQty !== '' && adjustCost !== '' && Number.isFinite(Number(adjustQty)) && Number(adjustQty) >= 0 && Number.isFinite(Number(adjustCost)) && Number(adjustCost) >= 0;
 
   return <div className="actuals-page">
     <div className="page-heading">
-      <div><h1>Actuals</h1><p>Track recorded usage, remaining quantities, and costs against original inventory.</p></div>
+      <div><h1>Actuals</h1></div>
       <button className="btn btn-secondary" onClick={exportCSV} disabled={!filteredItems.length}>Export CSV</button>
     </div>
     <div className="card">
@@ -130,8 +124,8 @@ export default function Actuals() {
         <div className="metric"><span className="metric-value">{formatNaira(totals.actual)}</span><span className="metric-label">Recorded actual cost</span></div>
         {totalBudget.overBudget > 0 && <div className="metric"><span className="metric-value actuals-negative">{formatNaira(totalBudget.overBudget)}</span><span className="metric-label">Over budget</span></div>}
       </div>
-      <p className="actuals-help">Approved requests record their full usage and cost here. Excess quantities and spending appear in red. Original inventory and planned budgets stay unchanged. Remaining quantity shows availability across the site{buildingSubtype ? `; usage and costs below are filtered to ${buildingSubtype}` : ''}.</p>
-      {!filteredItems.length && <EmptyState title="No items to compare" description={isAdmin ? 'Add inventory or choose different filters to view usage and actual costs.' : 'Choose different filters, or ask your administrator to add the project inventory.'} />}
+      {buildingSubtype && <p className="actuals-help">Usage and costs are filtered to {buildingSubtype}. Remaining quantity covers the whole site.</p>}
+      {!filteredItems.length && <EmptyState title="No items to compare" description={isAdmin ? 'Add inventory or change the filters.' : 'No inventory matches these filters.'} />}
       {Object.entries(byCategory).map(([category, categoryItems]) => <section key={category} className="actuals-comparison-section">
         <h2>{category}</h2>
         <div className="table-wrap" role="region" aria-label={`${category} usage and costs`} tabIndex={0}>
@@ -139,7 +133,7 @@ export default function Actuals() {
             <thead><tr><th>Item</th><th className="numeric">Original quantity</th><th className="numeric">Recorded usage</th><th className="numeric">Remaining quantity</th><th className="numeric">Planned value</th><th className="numeric">Actual cost</th><th className="numeric">Budget position</th>{isAdmin && <th>Availability</th>}</tr></thead>
             <tbody>{categoryItems.map((item) => {
               const record = rowsFor(item);
-              const usedAboveOriginal = Math.max(0, record.used - plannedQuantity(item));
+              const usedAboveOriginal = Math.max(0, decimalDifference(record.used, plannedQuantity(item)));
               return <tr key={item.id}>
                 <td className="actuals-item"><strong>{item.name}</strong><small>{item.code} · {item.unit}{!ps && item.project_site ? ` · ${item.project_site}` : ''}</small>{item.budget_scope && <small>{item.budget_scope}</small>}</td>
                 <td className="numeric">{formatQuantity(plannedQuantity(item))}</td>
@@ -147,7 +141,7 @@ export default function Actuals() {
                 <td className={`numeric${record.remaining <= 0 ? ' actuals-negative' : ''}`}><strong>{formatQuantity(Math.max(0, record.remaining))}</strong>{record.remaining < 0 ? <small>Over quantity: {formatQuantity(-record.remaining)} {item.unit}</small> : record.remaining === 0 && <small>None available</small>}</td>
                 <td className="numeric">{formatNaira(plannedAmount(item))}<small>{formatNaira(plannedUnitCost(item))} / {item.unit}</small></td>
                 <td className="numeric">{formatNaira(record.cost)}<small>{formatNaira(record.averageUnitCost)} / {item.unit} average</small></td>
-                <td className={`numeric${record.balance < 0 ? ' actuals-negative' : ''}`}>{formatNaira(Math.abs(record.balance))}<small>{record.balance < 0 ? 'Over budget' : 'Remaining budget'}</small></td>
+                <td className={`numeric${record.balance < 0 ? ' actuals-negative' : ''}`}>{record.balance === 0 ? 'On budget' : <>{formatNaira(Math.abs(record.balance))}<small>{record.balance < 0 ? 'Over budget' : 'Remaining budget'}</small></>}</td>
                 {isAdmin && <td><button className="btn btn-secondary btn-sm" aria-label={`Adjust availability for ${item.name}`} onClick={() => { adjustment.reset(); setAdjustItem(item); setAdjustOver(item.qty < 0); setAdjustQty(String(Math.abs(item.qty))); setAdjustCost(String(item.unit_cost)); }}>Adjust</button></td>}
               </tr>;
             })}</tbody>
@@ -157,7 +151,7 @@ export default function Actuals() {
     </div>
     {adjustItem && <Modal onClose={() => { if (!adjustment.isPending) closeAdjustment(); }} labelledBy="adjust-availability-title">
       <h3 id="adjust-availability-title">Adjust {adjustItem.name}</h3>
-      <p className="caption">Update the quantity after receipts or corrections. Choose Over quantity if approved usage still exceeds availability.</p>
+      <p className="caption">Enter the current available quantity or the outstanding shortfall.</p>
       <ErrorMessage error={adjustment.error} />
       <div className="form-row">
         <div className="form-group"><label htmlFor="adjust-position">Quantity position</label><select id="adjust-position" disabled={adjustment.isPending} value={adjustOver ? 'over' : 'available'} onChange={(e) => setAdjustOver(e.target.value === 'over')}><option value="available">Available quantity</option><option value="over">Over quantity</option></select></div>
