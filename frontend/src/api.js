@@ -54,7 +54,9 @@ async function request(path, options = {}) {
   }
   if (!res.ok) {
     const msg = Array.isArray(data.detail) ? data.detail.map(validationMessage).join('; ') : (data.detail || data.message || 'Request failed');
-    throw new Error(msg);
+    const error = new Error(msg);
+    error.status = res.status;
+    throw error;
   }
   return data;
 }
@@ -174,7 +176,7 @@ export const api = {
   },
 
   projectSites: {
-    list: () => request('/project-sites'),
+    list: (options = {}) => request('/project-sites', options),
     create: (data) => request('/project-sites', { method: 'POST', body: JSON.stringify(data) }),
     update: (id, data) =>
       request(`/project-sites/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

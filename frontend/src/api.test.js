@@ -78,6 +78,26 @@ test('An expired initial identity check preserves the open password reset page',
     assert.equal(options.redirectOnUnauthorized, undefined);
     return { ok: false, status: 401, json: async () => ({ detail: 'Invalid or expired token' }) };
   };
-  await assert.rejects(api.auth.me(), { message: 'Invalid or expired token' });
+  await assert.rejects(api.auth.me(), { message: 'Invalid or expired token', status: 401 });
+  assert.equal(window.location.href, '/reset-password');
+});
+
+test('A temporary identity-check failure preserves credentials and the current page', async () => {
+  const removed = [];
+  globalThis.localStorage = { getItem: () => 'saved-token', removeItem: (key) => removed.push(key) };
+  globalThis.window = { location: { href: '/actuals' } };
+  globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({ detail: 'Server is starting. Please try again.' }) });
+  await assert.rejects(api.auth.me(), { status: 503 });
+  assert.deepEqual(removed, []);
+  assert.equal(window.location.href, '/actuals');
+});
+
+test('Restoring a saved project can handle expired credentials without forcing a public-page redirect', async () => {
+  const removed = [];
+  globalThis.localStorage = { getItem: () => 'expired-token', removeItem: (key) => removed.push(key) };
+  globalThis.window = { location: { href: '/reset-password' } };
+  globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({ detail: 'Invalid or expired token' }) });
+  await assert.rejects(api.projectSites.list({ redirectOnUnauthorized: false }), { status: 401 });
+  assert.deepEqual(removed, []);
   assert.equal(window.location.href, '/reset-password');
 });

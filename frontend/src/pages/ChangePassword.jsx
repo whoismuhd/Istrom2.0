@@ -4,9 +4,10 @@ import { useAuth } from '../contexts/useAuth';
 import AuthShell from '../components/AuthShell';
 import PasswordInput from '../components/PasswordInput';
 import ErrorMessage from '../components/ErrorMessage';
+import LoadError from '../components/LoadError';
 
 export default function ChangePassword() {
-  const { user, loading, changePassword, logout } = useAuth();
+  const { user, loading, changePassword, logout, sessionError, retrySession } = useAuth();
   const [current, setCurrent] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -14,6 +15,7 @@ export default function ChangePassword() {
   const [pending, setPending] = useState(false);
   const [done, setDone] = useState(false);
   if (loading) return <div className="card" role="status">Loading...</div>;
+  if (sessionError) return <LoadError error={sessionError} onRetry={retrySession} />;
   if (!user) return <Navigate to="/login" replace />;
   if (user.needs_account_setup) return <Navigate to="/account-setup" replace />;
   if (done) return <Navigate to="/dashboard" replace />;

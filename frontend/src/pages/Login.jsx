@@ -6,11 +6,13 @@ import { api } from '../api';
 import AuthShell from '../components/AuthShell';
 import PasswordInput from '../components/PasswordInput';
 import ErrorMessage from '../components/ErrorMessage';
+import LoadError from '../components/LoadError';
 import { ADMIN_USERNAME } from '../utils/accounts';
 
 export default function Login() {
-  const { user, loading } = useAuth();
+  const { user, loading, sessionError, retrySession } = useAuth();
   if (loading) return <div className="card" role="status">Loading...</div>;
+  if (sessionError) return <LoadError error={sessionError} onRetry={retrySession} />;
   if (user) return <Navigate to="/" replace />;
   return <AuthShell title="Sign in to your workspace" description="Choose your account type to continue.">
     <div className="login-options">
@@ -31,10 +33,11 @@ export function PortalLogin({ role }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(false);
-  const { login, user, loading } = useAuth();
+  const { login, user, loading, sessionError, retrySession } = useAuth();
   const admin = role === 'admin';
   const setup = useQuery({ queryKey: ['accountSetup'], queryFn: api.auth.setupStatus, enabled: admin, retry: false });
   if (loading) return <div className="card" role="status">Loading...</div>;
+  if (sessionError) return <LoadError error={sessionError} onRetry={retrySession} />;
   if (user) return <Navigate to="/" replace />;
   const submit = async (event) => {
     event.preventDefault(); setError(null); setPending(true);

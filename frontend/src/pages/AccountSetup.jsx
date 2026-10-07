@@ -10,7 +10,7 @@ import LoadError from '../components/LoadError';
 import { ADMIN_USERNAME } from '../utils/accounts';
 
 export default function AccountSetup() {
-  const { setupAdmin, user, loading } = useAuth();
+  const { setupAdmin, user, loading, sessionError, retrySession } = useAuth();
   const [form, setForm] = useState({ access_code: '', password: '' });
   const [confirmation, setConfirmation] = useState('');
   const [error, setError] = useState(null);
@@ -18,6 +18,7 @@ export default function AccountSetup() {
   const status = useQuery({ queryKey: ['accountSetup'], queryFn: api.auth.setupStatus, retry: false });
   const update = (key) => (event) => setForm({ ...form, [key]: event.target.value });
   if (loading || status.isLoading) return <div className="card" role="status">Loading...</div>;
+  if (sessionError) return <LoadError error={sessionError} onRetry={retrySession} />;
   if (user && !user.needs_account_setup) return <Navigate to="/" replace />;
   if (!status.data?.setup_required && !status.error) return <Navigate to="/login/admin" replace />;
 

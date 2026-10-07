@@ -238,6 +238,12 @@ shared-code identities remain as historical records; new requests and approval
 decisions save the username alongside the account ID. Users are disabled
 rather than deleted, and the last active administrator cannot be removed.
 
+Refreshing keeps the current page and the administrator's selected project.
+Each browser tab remembers its own project for the signed-in account; sign-out
+clears that selection. Restored projects are checked against active sites.
+Temporary connection failures show a retry button on the current page while
+keeping the saved sign-in. Expired or revoked access still requires signing in.
+
 Run checks with `.venv/bin/python -m pytest backend/tests`,
 `npm run test --prefix frontend`, `npm run lint --prefix frontend`, and
 `npm run build`. Backend route tests use an isolated database.

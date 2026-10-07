@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './contexts/AuthContext';
 import { useAuth } from './contexts/useAuth';
 import Layout from './components/Layout';
+import LoadError from './components/LoadError';
 import Login, { PortalLogin } from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import BulkUpload from './pages/BulkUpload';
@@ -31,8 +32,9 @@ function ScrollToTop() {
 }
 
 function ProtectedRoute({ children }) {
-  const { user, loading } = useAuth();
+  const { user, loading, sessionError, retrySession } = useAuth();
   if (loading) return <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>Loading...</div>;
+  if (sessionError) return <LoadError error={sessionError} onRetry={retrySession} />;
   if (!user) return <Navigate to="/login" replace />;
   if (user.needs_account_setup) return <Navigate to="/account-setup" replace />;
   if (user.must_change_password) return <Navigate to="/change-password" replace />;
