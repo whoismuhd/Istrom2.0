@@ -49,3 +49,35 @@ test('All-sites history and notifications omit empty project filters', async () 
   await api.deletedRequests.clear({ project_site: 'Site A' });
   assert.deepEqual(urls, ['/api/deleted-requests', '/api/deleted-requests', '/api/notifications?', '/api/deleted-requests?project_site=Site+A']);
 });
+
+test('Admin recovery omits saved login tokens and sends reset secrets only in the request body', async () => {
+  const requests = [];
+  globalThis.localStorage = { getItem: () => 'stale-login-token' };
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  await api.auth.requestAdminReset();
+  await api.auth.resetAdminPassword({ token: 'reset-secret', new_password: 'New password', confirm_password: 'New password' });
+  assert.deepEqual(requests.map(({ url }) => url), ['/api/auth/admin-recovery/request', '/api/auth/admin-recovery/reset']);
+  assert.equal(requests[0].options.body, '{}');
+  for (const { options } of requests) {
+    assert.equal(options.headers.Authorization, undefined);
+    assert.equal(options.publicRequest, undefined);
+    assert.equal(options.redirectOnUnauthorized, undefined);
+  }
+  assert.equal(JSON.parse(requests[1].options.body).token, 'reset-secret');
+});
+
+test('An expired initial identity check preserves the open password reset page', async () => {
+  globalThis.localStorage = { getItem: () => 'expired-login-token' };
+  globalThis.window = { location: { href: '/reset-password' } };
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, '/api/auth/me');
+    assert.equal(options.headers.Authorization, 'Bearer expired-login-token');
+    assert.equal(options.redirectOnUnauthorized, undefined);
+    return { ok: false, status: 401, json: async () => ({ detail: 'Invalid or expired token' }) };
+  };
+  await assert.rejects(api.auth.me(), { message: 'Invalid or expired token' });
+  assert.equal(window.location.href, '/reset-password');
+});

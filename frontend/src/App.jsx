@@ -18,6 +18,7 @@ import Notifications from './pages/Notifications';
 import Users from './pages/Users';
 import AccountSetup from './pages/AccountSetup';
 import ChangePassword from './pages/ChangePassword';
+import { ForgotAdminPassword, ResetAdminPassword } from './pages/AdminRecovery';
 
 const queryClient = new QueryClient();
 
@@ -61,6 +62,8 @@ export default function App() {
             <Route path="/login/admin" element={<PortalLogin key="admin" role="admin" />} />
             <Route path="/login/site" element={<PortalLogin key="site" role="project_site" />} />
             <Route path="/account-setup" element={<AccountSetup />} />
+            <Route path="/forgot-password" element={<ForgotAdminPassword />} />
+            <Route path="/reset-password" element={<ResetAdminPassword />} />
             <Route path="/change-password" element={<ChangePassword />} />
             <Route
               path="/"

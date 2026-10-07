@@ -50,6 +50,7 @@ export function PortalLogin({ role }) {
       <button type="submit" className="btn btn-primary btn-block" disabled={pending}>{pending ? 'Signing in…' : 'Sign in'}</button>
     </form>
     {admin && setup.data?.setup_required && <p className="login-help"><Link to="/account-setup">Set up the first administrator account</Link></p>}
+    {admin && setup.data && !setup.data.setup_required && <p className="login-help"><Link to="/forgot-password">Forgot password?</Link></p>}
     {admin && setup.error && <p className="login-help" role="alert">Could not check account setup. <button type="button" className="btn btn-secondary btn-sm" onClick={() => setup.refetch()}>Retry</button></p>}
     <p className="login-help"><Link to="/login">Choose another account type</Link></p>
     {!admin && <p className="login-help">For access or password resets, contact your administrator.</p>}

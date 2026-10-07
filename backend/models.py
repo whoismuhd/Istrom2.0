@@ -56,6 +56,18 @@ class User(Base):
     is_active = Column(Boolean, default=True)
 
 
+class AdminPasswordReset(Base):
+    __tablename__ = 'admin_password_resets'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    recipient_hash = Column(String(64), nullable=False)
+    session_version = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+
+
 class Item(Base):
     __tablename__ = "items"
     __table_args__ = (Index('ux_items_import_key', 'import_key', unique=True),)

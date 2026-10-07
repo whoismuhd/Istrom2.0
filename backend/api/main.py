@@ -12,6 +12,7 @@ from api.routes import bulk_upload
 from api.routes import realtime
 from api.routes import push
 from api.routes import users
+from api.routes import admin_recovery
 from api.settings import ALLOWED_ORIGINS
 from api.body_limit import BodyLimitMiddleware
 
@@ -46,6 +47,7 @@ async def security_headers(request, call_next):
     return response
 
 app.include_router(auth.router)
+app.include_router(admin_recovery.router)
 app.include_router(items.router)
 app.include_router(requests.router)
 app.include_router(notifications.router)

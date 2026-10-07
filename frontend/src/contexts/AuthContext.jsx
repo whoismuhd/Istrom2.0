@@ -42,13 +42,14 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (!initialAuth.user) return;
     let active = true;
+    const startingToken = localStorage.getItem('istrom_token');
     api.auth.me().then((identity) => {
-      if (!active) return;
+      if (!active || localStorage.getItem('istrom_token') !== startingToken) return;
       localStorage.setItem('istrom_user', JSON.stringify(identity));
       setUser(identity);
       setProjectSite(identity.user_type === 'admin' && identity.project_site ? identity.project_site : null);
     }).catch(() => {
-      if (!active) return;
+      if (!active || localStorage.getItem('istrom_token') !== startingToken) return;
       localStorage.removeItem('istrom_token');
       localStorage.removeItem('istrom_user');
       setUser(null);
@@ -79,17 +80,21 @@ export function AuthProvider({ children }) {
   const setupAdmin = async (details) => acceptSession(await api.auth.setup(details));
   const changePassword = async (details) => acceptSession(await api.auth.changePassword(details));
 
+  const clearSession = () => {
+    queryClient.clear();
+    localStorage.removeItem('istrom_token');
+    localStorage.removeItem('istrom_user');
+    setUser(null);
+    setProjectSite(null);
+  };
+
   const logout = async () => {
     try {
       await disablePush();
     } catch {
       // Local sign-out still completes if the subscription service is offline.
     }
-    queryClient.clear();
-    localStorage.removeItem('istrom_token');
-    localStorage.removeItem('istrom_user');
-    setUser(null);
-    setProjectSite(null);
+    clearSession();
   };
 
   const getEffectiveProjectSite = () => {
@@ -106,6 +111,7 @@ export function AuthProvider({ children }) {
     setupAdmin,
     changePassword,
     logout,
+    clearSession,
     projectSite,
     setProjectSite,
     getEffectiveProjectSite,

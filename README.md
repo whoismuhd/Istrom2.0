@@ -60,6 +60,69 @@ cd frontend && npm run dev
 - `ACCESS_CODE_ENCRYPTION_KEY` - Retain the existing key when upgrading encrypted legacy code storage; legacy codes cannot sign in
 - `VITE_API_URL` - Frontend API base URL (defaults to `/api` for dev proxy)
 
+## Admin password recovery
+
+Admin sign-in includes **Forgot password?** once the administrator account
+exists. Recovery sends a link to one address configured privately on the
+backend. Site users continue to have their passwords reset by the admin.
+
+Configure the following in the backend host's environment settings (or the
+ignored local `.env` file):
+
+| Setting | Value |
+| --- | --- |
+| `ADMIN_RECOVERY_EMAIL` | The trusted recovery email |
+| `APP_FRONTEND_URL` | Exact frontend origin, also listed in `CORS_ORIGINS` |
+| `ADMIN_RECOVERY_PROVIDER` | `resend` (default) |
+| `RESEND_API_KEY` | Private Resend API key |
+| `RESEND_FROM` | Sender address, e.g. `onboarding@resend.dev` for testing |
+
+Render Free blocks outbound SMTP on ports 25, 465 and 587, so use Resend's
+HTTPS email API on that hosting plan. Create a Resend account using the same
+email as `ADMIN_RECOVERY_EMAIL`, then save its API key privately on the backend.
+The `onboarding@resend.dev` sender can send only to your Resend account email.
+For company use or another recipient, verify a company sender domain in Resend
+and update `RESEND_FROM` to an address on that domain.
+[Render SMTP limits](https://render.com/docs/free),
+[Resend testing sender restrictions](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain).
+
+On a host that permits outbound SMTP, `ADMIN_RECOVERY_PROVIDER=smtp` instead
+uses these additional settings:
+
+| Setting | Value |
+| --- | --- |
+| `SMTP_HOST` | Your mail provider's SMTP server |
+| `SMTP_PORT` | `587` for STARTTLS or `465` for implicit TLS |
+| `SMTP_SECURITY` | `starttls` or `ssl` |
+| `SMTP_USERNAME` | Mail provider username |
+| `SMTP_PASSWORD` | Mail provider credential or app-specific password |
+| `SMTP_FROM` | Sender address authorized by that provider |
+
+Use HTTPS for the hosted frontend; loopback HTTP is supported locally. Never
+put these values in a `VITE_*` variable, Git, or the public login form. Restart
+the API after changing settings. Incomplete settings disable recovery and
+return a clear error; no reset links or passwords are printed in logs.
+
+Reset links expire after 15 minutes and are stored only as hashes. They work
+once, and all outstanding links and existing admin sessions are invalidated
+after a successful reset. Normal password changes also invalidate old links.
+Changing the recovery email invalidates links sent to the previous address.
+Requests are limited by IP and by the administrator's database record; a new
+request does not invalidate an earlier valid link. Recovery never reopens
+initial admin setup or changes a site user's account. The reset page requires
+confirmation of a new password with at least 8 characters, then returns to
+normal sign-in. A separate email confirms that the password changed.
+
+Both emails include Istrom's official logo, a responsive HTML layout and a
+plain text alternative. The logo is embedded as an inline PNG, so it does not
+need a public image server. Templates live in
+`backend/api/services/recovery_email_templates.py`.
+
+Verify delivery with the real mail provider before launch, including spam
+folders, expired links, repeat use and sign-out on other devices. Automated
+tests exercise delivery through a substitute mail transport; they cannot
+confirm delivery to your real inbox without configured credentials.
+
 ## Hosting checklist
 
 A free pilot can use a Render Static Site for the frontend, one Render Free Web

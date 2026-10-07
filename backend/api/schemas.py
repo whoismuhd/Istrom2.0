@@ -89,6 +89,24 @@ class PasswordChange(BaseModel):
     new_password: PasswordText
 
 
+class AdminRecoveryRequest(BaseModel):
+    # The recipient and account are always selected by the backend.
+    model_config = ConfigDict(extra='forbid')
+
+
+class AdminRecoveryReset(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    token: str = Field(min_length=43, max_length=43, pattern=r'^[A-Za-z0-9_-]{43}$')
+    new_password: PasswordText
+    confirm_password: PasswordText
+
+    @model_validator(mode='after')
+    def matching_passwords(self):
+        if self.new_password != self.confirm_password:
+            raise ValueError('The passwords do not match.')
+        return self
+
+
 class ManagedUserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

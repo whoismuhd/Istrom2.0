@@ -37,17 +37,18 @@ function validationMessage(detail) {
 }
 
 async function request(path, options = {}) {
+  const { publicRequest = false, redirectOnUnauthorized = true, ...fetchOptions } = options;
   const url = `${API_BASE}${path}`;
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const baseHeaders = isFormData
-    ? getAuthHeaders()
-    : { 'Content-Type': 'application/json', ...getAuthHeaders() };
+    ? (publicRequest ? {} : getAuthHeaders())
+    : { 'Content-Type': 'application/json', ...(publicRequest ? {} : getAuthHeaders()) };
   const res = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers: { ...baseHeaders, ...options.headers },
   });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && !['/auth/login', '/auth/setup'].includes(path)) {
+  if (res.status === 401 && redirectOnUnauthorized && !publicRequest && !['/auth/login', '/auth/setup'].includes(path)) {
     expireSession();
     throw new Error('Session expired');
   }
@@ -60,10 +61,13 @@ async function request(path, options = {}) {
 
 export const api = {
   auth: {
-    me: () => request('/auth/me'),
+    // AuthProvider handles initial expiry, keeping public recovery pages open.
+    me: () => request('/auth/me', { redirectOnUnauthorized: false }),
     setupStatus: () => request('/auth/setup-status'),
     setup: (data) => request('/auth/setup', { method: 'POST', body: JSON.stringify(data) }),
     changePassword: (data) => request('/auth/password', { method: 'POST', body: JSON.stringify(data) }),
+    requestAdminReset: () => request('/auth/admin-recovery/request', { method: 'POST', body: '{}', publicRequest: true }),
+    resetAdminPassword: (data) => request('/auth/admin-recovery/reset', { method: 'POST', body: JSON.stringify(data), publicRequest: true }),
     login: (credentials) =>
       request('/auth/login', {
         method: 'POST',
