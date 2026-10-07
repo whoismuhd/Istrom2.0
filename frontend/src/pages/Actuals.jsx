@@ -128,7 +128,7 @@ export default function Actuals() {
       <div className="metrics-row actuals-summary">
         <div className="metric"><span className="metric-value">{formatNaira(totals.planned)}</span><span className="metric-label">Planned value</span></div>
         <div className="metric"><span className="metric-value">{formatNaira(totals.actual)}</span><span className="metric-label">Recorded actual cost</span></div>
-        <div className="metric"><span className={`metric-value${totalBudget.overBudget > 0 ? ' actuals-negative' : ''}`}>{formatNaira(totalBudget.overBudget || totalBudget.remainingBudget)}</span><span className="metric-label">{totalBudget.overBudget > 0 ? 'Over budget' : 'Remaining budget'}</span></div>
+        {totalBudget.overBudget > 0 && <div className="metric"><span className="metric-value actuals-negative">{formatNaira(totalBudget.overBudget)}</span><span className="metric-label">Over budget</span></div>}
       </div>
       <p className="actuals-help">Approved requests record their full usage and cost here. Excess quantities and spending appear in red. Original inventory and planned budgets stay unchanged. Remaining quantity shows availability across the site{buildingSubtype ? `; usage and costs below are filtered to ${buildingSubtype}` : ''}.</p>
       {!filteredItems.length && <EmptyState title="No items to compare" description={isAdmin ? 'Add inventory or choose different filters to view usage and actual costs.' : 'Choose different filters, or ask your administrator to add the project inventory.'} />}

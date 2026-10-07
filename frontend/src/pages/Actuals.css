@@ -1,6 +1,6 @@
 .actuals-page { min-width: 0; }
 .actuals-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 16px; margin-bottom: 24px; }
-.actuals-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 0; }
+.actuals-summary { grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); margin-top: 0; }
 .actuals-help { color: var(--text-muted); font-size: 13px; margin: 0 0 24px; }
 .actuals-comparison-section { margin-bottom: 24px; }
 .actuals-comparison-section:last-child { margin-bottom: 0; }
