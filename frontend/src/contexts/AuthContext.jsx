@@ -6,6 +6,7 @@ import { disablePush } from '../push';
 import { isGlobalAdministrator, readProjectSelection, saveProjectSelection, validateProjectSelection } from '../utils/workspace';
 import { clearImportDraft, importDraftOwner } from '../utils/importDrafts';
 import { clearWorkspaceStates, workspaceOwner } from '../utils/workspaceState';
+import { createAuthTransitions } from '../utils/authTransitions';
 
 function getStoredAuth() {
   // Retire the old shared login; each tab now signs in independently.
@@ -39,6 +40,7 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(Boolean(initialAuth.user));
   const [sessionError, setSessionError] = useState(null);
   const [sessionAttempt, setSessionAttempt] = useState(0);
+  const [transitions] = useState(() => createAuthTransitions(() => sessionStorage.getItem('istrom_token')));
   useEffect(() => {
     if (!initialAuth.user) return;
     let active = true;
@@ -107,11 +109,12 @@ export function AuthProvider({ children }) {
     return res;
   };
 
-  const login = async (credentials) => acceptSession(await api.auth.login(credentials));
-  const setupAdmin = async (details) => acceptSession(await api.auth.setup(details));
-  const changePassword = async (details) => acceptSession(await api.auth.changePassword(details));
+  const login = (credentials, options = {}) => transitions.authenticate(() => api.auth.login(credentials), acceptSession, options.signal);
+  const setupAdmin = (details, options = {}) => transitions.authenticate(() => api.auth.setup(details), acceptSession, options.signal);
+  const changePassword = (details) => transitions.authenticate(() => api.auth.changePassword(details), acceptSession);
 
   const clearSession = () => {
+    transitions.invalidate();
     clearWorkspaceStates();
     clearImportDraft().catch(() => {});
     queryClient.clear();
@@ -124,14 +127,13 @@ export function AuthProvider({ children }) {
     setLoading(false);
   };
 
-  const logout = async () => {
-    try {
-      await disablePush({signingOut:true});
-    } catch {
-      // Local sign-out still completes if the subscription service is offline.
-    }
-    clearSession();
-  };
+  const resetAdminPassword = (details, options = {}) => transitions.resetPassword(
+    () => api.auth.resetAdminPassword(details),
+    clearSession,
+    options.signal,
+  );
+
+  const logout = () => transitions.signOut(() => disablePush({signingOut:true}), clearSession);
 
   const getEffectiveProjectSite = () => {
     if (user?.user_type === 'project_site') return user.project_site;
@@ -147,6 +149,7 @@ export function AuthProvider({ children }) {
     login,
     setupAdmin,
     changePassword,
+    resetAdminPassword,
     logout,
     clearSession,
     projectSite,

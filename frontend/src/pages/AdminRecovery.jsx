@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../contexts/useAuth';
@@ -35,7 +35,9 @@ export function ResetAdminPassword() {
   const [pending, setPending] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState(null);
-  const { clearSession } = useAuth();
+  const { resetAdminPassword } = useAuth();
+  const attempt = useRef(null);
+  useEffect(() => () => attempt.current?.abort(), []);
   useEffect(() => {
     // Keep the token only in this page's memory, including after StrictMode remounts.
     if (location.hash || location.search) navigate(location.pathname, { replace: true });
@@ -44,11 +46,14 @@ export function ResetAdminPassword() {
     event.preventDefault(); setError(null);
     if (password !== confirmation) { setError(new Error('The passwords do not match.')); return; }
     setPending(true);
+    attempt.current?.abort();
+    const controller = new AbortController();
+    attempt.current = controller;
     try {
-      await api.auth.resetAdminPassword({ token, new_password: password, confirm_password: confirmation });
-      clearSession(); setPassword(''); setConfirmation(''); setDone(true);
-    } catch (err) { setError(err); }
-    finally { setPending(false); }
+      await resetAdminPassword({ token, new_password: password, confirm_password: confirmation }, { signal: controller.signal });
+      if (!controller.signal.aborted) { setPassword(''); setConfirmation(''); setDone(true); }
+    } catch (err) { if (!controller.signal.aborted && err.name !== 'AbortError') setError(err); }
+    finally { if (!controller.signal.aborted && attempt.current === controller) setPending(false); }
   };
   return <AuthShell title={done ? 'Password updated' : 'Choose a new password'} description={done ? 'Sign in with your new password.' : undefined}>
     {done ? <Link className="btn btn-primary btn-block" to="/login/admin">Admin sign in</Link> : !token ? <>
@@ -56,8 +61,8 @@ export function ResetAdminPassword() {
       <p className="login-help"><Link to="/forgot-password">Request a reset link</Link></p>
     </> : <>
       <form className="login-form" onSubmit={submit}>
-        <PasswordInput id="reset-password" label="New password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" minLength={8} maxLength={128} autoFocus required />
-        <PasswordInput id="reset-confirm" label="Confirm password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="new-password" minLength={8} maxLength={128} required />
+        <PasswordInput id="reset-password" label="New password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" minLength={8} maxLength={128} autoFocus required disabled={pending} />
+        <PasswordInput id="reset-confirm" label="Confirm password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="new-password" minLength={8} maxLength={128} required disabled={pending} />
         <p className="form-hint">At least 8 characters.</p>
         <ErrorMessage error={error} />
         <button className="btn btn-primary btn-block" disabled={pending}>{pending ? 'Saving…' : 'Save password'}</button>

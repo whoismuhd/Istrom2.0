@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/useAuth';
@@ -41,6 +41,8 @@ export function PortalLogin({ role }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(false);
+  const attempt = useRef(null);
+  useEffect(() => () => attempt.current?.abort(), []);
   const { login, user, loading, sessionError, retrySession } = useAuth();
   const admin = role === 'admin';
   const setup = useQuery({ queryKey: ['accountSetup'], queryFn: api.auth.setupStatus, enabled: admin, retry: false });
@@ -49,9 +51,12 @@ export function PortalLogin({ role }) {
   if (user) return <Navigate to="/" replace />;
   const submit = async (event) => {
     event.preventDefault(); setError(null); setPending(true);
-    try { await login({ ...(admin ? {} : { username }), password, user_type: role }); }
-    catch (err) { setError(err); }
-    finally { setPending(false); }
+    attempt.current?.abort();
+    const controller = new AbortController();
+    attempt.current = controller;
+    try { await login({ ...(admin ? {} : { username }), password, user_type: role }, { signal: controller.signal }); }
+    catch (err) { if (!controller.signal.aborted && err.name !== 'AbortError') setError(err); }
+    finally { if (!controller.signal.aborted && attempt.current === controller) setPending(false); }
   };
   return <AuthShell title={admin ? 'Admin sign in' : 'Site user sign in'}>
     <nav className="login-role-switch" aria-label="Account type">
@@ -59,8 +64,8 @@ export function PortalLogin({ role }) {
       <Link to="/login/site" aria-current={!admin ? 'page' : undefined}>Site user</Link>
     </nav>
     <form onSubmit={submit} className="login-form">
-      {admin ? <input type="hidden" name="username" autoComplete="username" value={ADMIN_USERNAME} /> : <div className="form-group"><label htmlFor="login-username">Username</label><input id="login-username" name="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter your username" autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={80} autoFocus required /></div>}
-      <PasswordInput id="login-password" name="password" label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" autoFocus={admin} maxLength={128} required />
+      {admin ? <input type="hidden" name="username" autoComplete="username" value={ADMIN_USERNAME} /> : <div className="form-group"><label htmlFor="login-username">Username</label><input id="login-username" name="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter your username" autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={80} autoFocus required disabled={pending} /></div>}
+      <PasswordInput id="login-password" name="password" label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" autoFocus={admin} maxLength={128} required disabled={pending} />
       <ErrorMessage error={error} />
       <button type="submit" className="btn btn-primary btn-block" disabled={pending}>{pending ? 'Signing in…' : 'Sign in'}</button>
     </form>

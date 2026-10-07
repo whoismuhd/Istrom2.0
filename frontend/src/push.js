@@ -1,5 +1,43 @@
 /** Web Push client: service-worker registration + subscribe/unsubscribe. */
 import { api } from './api.js';
+import { workspaceGeneration } from './utils/workspaceState.js';
+
+let pushEpoch = 0;
+let registrationQueue = Promise.resolve();
+const pendingSignOuts = new Set();
+
+function captureSession() {
+  return { token:sessionStorage.getItem('istrom_token'), generation:workspaceGeneration(), epoch:pushEpoch };
+}
+
+function requireCurrentSession(session, checkIntent = true) {
+  if (session.token !== sessionStorage.getItem('istrom_token') || session.generation !== workspaceGeneration()
+    || (checkIntent && session.epoch !== pushEpoch)) {
+    const error = new Error('Your sign-in changed. Please try again.');
+    error.name = 'AbortError';
+    throw error;
+  }
+}
+
+function beginChange(signingOut = false) {
+  const session = captureSession();
+  // A new toggle must not cancel the cleanup of this same account's sign-out.
+  if (!signingOut && [...pendingSignOuts].some((pending) => pending.token === session.token
+    && pending.generation === session.generation)) {
+    const error = new Error('Sign-out is in progress.');
+    error.name = 'AbortError';
+    throw error;
+  }
+  session.epoch = ++pushEpoch;
+  return session;
+}
+
+function queueRegistration(change) {
+  const result = registrationQueue.then(change);
+  // A failed request must still allow the next account cleanup to run.
+  registrationQueue = result.catch(() => {});
+  return result;
+}
 
 export function pushSupported() {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -27,9 +65,12 @@ export async function getPushSubscription() {
 }
 
 export async function deviceNotificationsEnabled() {
+  const session = captureSession();
   const sub = await getPushSubscription();
+  requireCurrentSession(session);
   if (!sub) return false;
   const status = await api.push.subscriptionStatus({endpoint: sub.endpoint});
+  requireCurrentSession(session);
   return status.enabled;
 }
 
@@ -39,34 +80,64 @@ export async function deviceNotificationsEnabled() {
  */
 export async function enablePush() {
   if (!pushSupported()) return { ok: false, reason: 'This browser does not support push notifications.' };
+  const session = beginChange();
 
   const permission = await Notification.requestPermission();
+  requireCurrentSession(session);
   if (permission !== 'granted') return { ok: false, reason: 'Notification permission was not granted.' };
 
   const { public_key: publicKey } = await api.push.vapidPublicKey();
+  requireCurrentSession(session);
   const reg = await getRegistration();
+  requireCurrentSession(session);
   await navigator.serviceWorker.ready;
+  requireCurrentSession(session);
 
   let sub = await reg.pushManager.getSubscription();
-  if (!sub) {
-    sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
-  }
-  await api.push.subscribe(sub.toJSON());
+  requireCurrentSession(session);
+  await queueRegistration(async () => {
+    requireCurrentSession(session);
+    // A preceding opt-out can remove the subscription found during preparation.
+    // Refresh it after queued browser cleanup before creating/registering one.
+    sub = await reg.pushManager.getSubscription();
+    requireCurrentSession(session);
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+      requireCurrentSession(session);
+    }
+    await api.push.subscribe(sub.toJSON());
+    requireCurrentSession(session);
+  });
   return { ok: true };
 }
 
 export async function disablePush({ signingOut = false } = {}) {
-  const sub = await getPushSubscription();
-  if (sub) {
-    await api.push.unsubscribe({...sub.toJSON(), ...(signingOut ? {current_account_only:true} : {})});
-    // Browser subscriptions are shared across tabs. Sign-out removes only this
-    // account's server registration; another tab can keep using the device.
-    if (!signingOut) {
-      await sub.unsubscribe();
+  const session = beginChange(signingOut);
+  if (signingOut) pendingSignOuts.add(session);
+  // Sign-out cleanup remains valid for its captured account even if another
+  // sign-out intent occurs; token/generation checks still protect a new login.
+  const checkSession = () => requireCurrentSession(session, !signingOut);
+  try {
+    const sub = await getPushSubscription();
+    checkSession();
+    if (sub) {
+      await queueRegistration(async () => {
+        checkSession();
+        await api.push.unsubscribe({...sub.toJSON(), ...(signingOut ? {current_account_only:true} : {})});
+        checkSession();
+        // Browser subscriptions are shared across tabs. Sign-out removes only
+        // this account's server registration; another tab can keep using it.
+        if (!signingOut) {
+          await sub.unsubscribe();
+          checkSession();
+        }
+      });
     }
+    return { ok: true };
+  } finally {
+    pendingSignOuts.delete(session);
   }
-  return { ok: true };
 }

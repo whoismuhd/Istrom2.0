@@ -86,6 +86,28 @@ function fakeDatabase() {
   };
 }
 
+function clearSourceAfterDraftRead(fake, clearSource) {
+  const transact = fake.database.transaction;
+  let delayed = false;
+  fake.database.transaction = (names, mode) => {
+    const transaction = transact(names, mode);
+    if (mode !== 'readonly' || delayed) return transaction;
+    delayed = true;
+    let complete;
+    Object.defineProperty(transaction, 'oncomplete', {
+      get: () => () => {
+        // Finish a real source clear before delivering the copied tab's read.
+        Promise.resolve().then(clearSource).then(() => complete?.(), (error) => {
+          transaction.error = error;
+          transaction.onabort?.();
+        });
+      },
+      set: (callback) => { complete = callback; },
+    });
+    return transaction;
+  };
+}
+
 test('Import draft ownership changes with account, role, site assignment and admin scope', () => {
   assert.equal(importDraftOwner({ ...admin }), importDraftOwner(admin));
   for (const change of [{ user_id: 2 }, { username: 'other.admin' }, { project_site: 'Site B' }, { project_site: 'Site A', is_global_admin: false }]) {
@@ -258,7 +280,7 @@ test('staged selection restores file bytes and site before analysis, then clears
   const replacement = staged('Site B', new File(['replacement workbook'], 'replacement.xlsx'));
   await saveImportDraft(admin, replacement);
   const id = globalThis.sessionStorage.getItem(TAB_KEY);
-  fake.stores.get('workbooks').delete(id);
+  fake.stores.get('workbooks').delete(fake.stores.get('drafts').get(id).workbookId || id);
   const missing = await readImportDraft(admin);
   assert.equal(missing.file, null);
   assert.equal(missing.fileName, 'replacement.xlsx');
@@ -307,5 +329,350 @@ test('an old import cleanup cannot erase a new staged workbook or restore a disc
   await Promise.all([obsolete, discarding]);
   assert.equal(await readImportDraft(admin), null);
   assert.equal(fake.stores.get('workbooks').size, 0);
+  fake.database.onversionchange();
+});
+
+test('Without Web Locks, copied and refreshed tabs isolate drafts while sharing workbook bytes', async () => {
+  const first = await import('./importDrafts.js?fallback-first');
+  const copied = await import('./importDrafts.js?fallback-copied');
+  const early = await import('./importDrafts.js?fallback-early-clear');
+  const wrongOwner = await import('./importDrafts.js?fallback-wrong-owner');
+  const refreshed = await import('./importDrafts.js?fallback-refreshed');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.navigator.locks = undefined;
+  const originalStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, draft('Original edit'));
+  const originalId = originalStorage.getItem(TAB_KEY);
+
+  const earlyStorage = storage();
+  earlyStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = earlyStorage;
+  await early.clearImportDraft();
+  assert.equal(earlyStorage.getItem(TAB_KEY), null);
+  assert.equal(fake.stores.get('drafts').has(originalId), true);
+
+  const wrongStorage = storage();
+  wrongStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = wrongStorage;
+  assert.equal(await wrongOwner.readImportDraft({ ...admin, user_id: 2 }), null);
+  assert.equal(wrongStorage.getItem(TAB_KEY), null);
+  assert.equal(fake.stores.get('drafts').has(originalId), true);
+
+  const copiedStorage = storage();
+  copiedStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = copiedStorage;
+  const working = await copied.readImportDraft(admin);
+  const copiedId = copiedStorage.getItem(TAB_KEY);
+  assert.notEqual(copiedId, originalId);
+  working.rowEdits = { ...working.rowEdits,
+    'Sheet1::2': { ...working.rowEdits['Sheet1::2'], name: 'Copied edit' } };
+  await copied.saveImportDraft(admin, working);
+  assert.equal(fake.stores.get('drafts').get(originalId).draft.rowEdits['Sheet1::2'].name, 'Original edit');
+  assert.equal(fake.stores.get('workbooks').size, 1);
+
+  const afterRefresh = await refreshed.readImportDraft(admin);
+  const refreshedId = copiedStorage.getItem(TAB_KEY);
+  assert.notEqual(refreshedId, copiedId);
+  assert.equal(afterRefresh.rowEdits['Sheet1::2'].name, 'Copied edit');
+  assert.equal(await afterRefresh.file.text(), 'workbook contents');
+  assert.equal(fake.stores.get('workbooks').size, 1);
+
+  globalThis.sessionStorage = originalStorage;
+  await first.clearImportDraft();
+  assert.equal(fake.stores.get('drafts').has(originalId), false);
+  assert.equal(fake.stores.get('workbooks').size, 1);
+  globalThis.sessionStorage = copiedStorage;
+  assert.equal((await refreshed.readImportDraft(admin)).rowEdits['Sheet1::2'].name, 'Copied edit');
+  await refreshed.clearImportDraft();
+  // The refresh source remains a recovery snapshot until its own clear or expiry.
+  assert.equal(fake.stores.get('drafts').has(copiedId), true);
+  copiedStorage.setItem(TAB_KEY, copiedId);
+  await copied.clearImportDraft();
+  assert.equal(fake.stores.get('drafts').size, 0);
+  assert.equal(fake.stores.get('workbooks').size, 0);
+  fake.database.onversionchange();
+});
+
+test('Replacing a copied workbook preserves other tabs and prunes only unreferenced bytes', async () => {
+  const first = await import('./importDrafts.js?fallback-file-first');
+  const copied = await import('./importDrafts.js?fallback-file-copied');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.navigator.locks = undefined;
+  const originalStorage = storage();
+  const copiedStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, staged());
+  copiedStorage.setItem(TAB_KEY, originalStorage.getItem(TAB_KEY));
+  globalThis.sessionStorage = copiedStorage;
+  await copied.readImportDraft(admin);
+  await copied.saveImportDraft(admin, staged('Site A', new File(['new workbook'], 'new.xlsx')));
+  assert.equal(fake.stores.get('workbooks').size, 2);
+  globalThis.sessionStorage = originalStorage;
+  assert.equal(await (await first.readImportDraft(admin)).file.text(), 'selected workbook');
+  globalThis.sessionStorage = copiedStorage;
+  assert.equal(await (await copied.readImportDraft(admin)).file.text(), 'new workbook');
+  await copied.clearImportDraft();
+  assert.equal(fake.stores.get('workbooks').size, 1);
+  globalThis.sessionStorage = originalStorage;
+  await first.clearImportDraft();
+  assert.equal(fake.stores.get('workbooks').size, 0);
+  fake.database.onversionchange();
+});
+
+test('A failed copied-tab transaction leaves the inherited draft pointer recoverable', async () => {
+  const first = await import('./importDrafts.js?copy-quota-first');
+  const copied = await import('./importDrafts.js?copy-quota-copied');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.navigator.locks = undefined;
+  const originalStorage = storage();
+  const copiedStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, draft('Recoverable edit'));
+  const originalId = originalStorage.getItem(TAB_KEY);
+  copiedStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = copiedStorage;
+  const transact = fake.database.transaction;
+  let failCopy = true;
+  fake.database.transaction = (names, mode) => {
+    const transaction = transact(names, mode);
+    const store = transaction.objectStore;
+    transaction.objectStore = (name) => {
+      const objectStore = store(name);
+      const put = objectStore.put;
+      objectStore.put = (value) => {
+        if (name !== 'drafts' || value.id === originalId || !failCopy) return put(value);
+        failCopy = false;
+        transaction.error = new DOMException('Storage quota exceeded', 'QuotaExceededError');
+        queueMicrotask(() => transaction.onabort?.());
+      };
+      return objectStore;
+    };
+    return transaction;
+  };
+  await assert.rejects(copied.readImportDraft(admin), /Storage quota exceeded/);
+  assert.equal(copiedStorage.getItem(TAB_KEY), originalId);
+  assert.equal(fake.stores.get('drafts').get(originalId).draft.rowEdits['Sheet1::2'].name, 'Recoverable edit');
+  assert.equal(fake.stores.get('workbooks').size, 1);
+  const recovered = await copied.readImportDraft(admin);
+  assert.notEqual(copiedStorage.getItem(TAB_KEY), originalId);
+  assert.equal(recovered.rowEdits['Sheet1::2'].name, 'Recoverable edit');
+  assert.equal(await recovered.file.text(), 'workbook contents');
+  await copied.clearImportDraft();
+  globalThis.sessionStorage = originalStorage;
+  await first.clearImportDraft();
+  fake.database.onversionchange();
+});
+
+test('Expired recovery metadata does not delete workbook bytes referenced by an active tab', async () => {
+  const first = await import('./importDrafts.js?expiry-first');
+  const copied = await import('./importDrafts.js?expiry-copied');
+  const refreshed = await import('./importDrafts.js?expiry-refreshed');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.navigator.locks = undefined;
+  const originalStorage = storage();
+  const copiedStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, draft());
+  const originalId = originalStorage.getItem(TAB_KEY);
+  copiedStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = copiedStorage;
+  await copied.readImportDraft(admin);
+  const copiedId = copiedStorage.getItem(TAB_KEY);
+  fake.stores.get('drafts').get(originalId).savedAt = Date.now() - IMPORT_DRAFT_MAX_AGE - 1;
+  const restored = await refreshed.readImportDraft(admin);
+  assert.equal(fake.stores.get('drafts').has(originalId), false);
+  assert.equal(fake.stores.get('workbooks').size, 1);
+  assert.equal(await restored.file.text(), 'workbook contents');
+  await refreshed.clearImportDraft();
+  copiedStorage.setItem(TAB_KEY, copiedId);
+  await copied.clearImportDraft();
+  assert.equal(fake.stores.get('workbooks').size, 0);
+  fake.database.onversionchange();
+});
+
+test('A concurrent source-tab clear after reading cannot leave the copied workbook reference missing', async () => {
+  const first = await import('./importDrafts.js?clear-race-first');
+  const copied = await import('./importDrafts.js?clear-race-copied');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.navigator.locks = undefined;
+  const originalStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, draft());
+  const originalId = globalThis.sessionStorage.getItem(TAB_KEY);
+  const copiedStorage = storage();
+  copiedStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = copiedStorage;
+  clearSourceAfterDraftRead(fake, () => {
+    globalThis.sessionStorage = originalStorage;
+    const clearing = first.clearImportDraft();
+    globalThis.sessionStorage = copiedStorage;
+    return clearing;
+  });
+  const restored = await copied.readImportDraft(admin);
+  assert.equal(fake.stores.get('drafts').has(originalId), false);
+  assert.equal(await restored.file.text(), 'workbook contents');
+  assert.equal(fake.stores.get('workbooks').size, 1);
+  assert.equal(await (await copied.readImportDraft(admin)).file.text(), 'workbook contents');
+  await copied.clearImportDraft();
+  assert.equal(fake.stores.get('workbooks').size, 0);
+  fake.database.onversionchange();
+});
+
+test('A shared workbook reference is read atomically before its last source tab clears', async () => {
+  const first = await import('./importDrafts.js?reference-race-first');
+  const copied = await import('./importDrafts.js?reference-race-copied');
+  const refreshed = await import('./importDrafts.js?reference-race-refreshed');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.navigator.locks = undefined;
+  const originalStorage = storage();
+  const copiedStorage = storage();
+  const refreshedStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, draft('Shared edit'));
+  const originalId = originalStorage.getItem(TAB_KEY);
+  copiedStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = copiedStorage;
+  await copied.readImportDraft(admin);
+  const copiedId = copiedStorage.getItem(TAB_KEY);
+  assert.equal(fake.stores.get('drafts').get(copiedId).workbookId, originalId);
+  globalThis.sessionStorage = originalStorage;
+  await first.clearImportDraft();
+  refreshedStorage.setItem(TAB_KEY, copiedId);
+  globalThis.sessionStorage = refreshedStorage;
+  clearSourceAfterDraftRead(fake, () => {
+    globalThis.sessionStorage = copiedStorage;
+    const clearing = copied.clearImportDraft();
+    globalThis.sessionStorage = refreshedStorage;
+    return clearing;
+  });
+  const readsBefore = fake.calls.filter((call) => call.operation === 'transaction' && call.mode === 'readonly').length;
+  const restored = await refreshed.readImportDraft(admin);
+  const readsAfter = fake.calls.filter((call) => call.operation === 'transaction' && call.mode === 'readonly').length;
+  assert.equal(readsAfter - readsBefore, 1);
+  assert.equal(fake.stores.get('drafts').has(copiedId), false);
+  assert.equal(restored.rowEdits['Sheet1::2'].name, 'Shared edit');
+  assert.equal(await restored.file.text(), 'workbook contents');
+  assert.equal(await (await refreshed.readImportDraft(admin)).file.text(), 'workbook contents');
+  await refreshed.clearImportDraft();
+  assert.equal(fake.stores.get('workbooks').size, 0);
+  fake.database.onversionchange();
+});
+
+test('A copied tab saving before hydration preserves its inherited pointer if storage is full', async () => {
+  const first = await import('./importDrafts.js?save-quota-first');
+  const copied = await import('./importDrafts.js?save-quota-copied');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.navigator.locks = undefined;
+  const originalStorage = storage();
+  const copiedStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, draft('Original recoverable edit'));
+  const originalId = originalStorage.getItem(TAB_KEY);
+  copiedStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = copiedStorage;
+  const transact = fake.database.transaction;
+  let failSave = true;
+  fake.database.transaction = (names, mode) => {
+    const transaction = transact(names, mode);
+    const store = transaction.objectStore;
+    transaction.objectStore = (name) => {
+      const objectStore = store(name);
+      const put = objectStore.put;
+      objectStore.put = (value) => {
+        if (name !== 'drafts' || value.id === originalId || !failSave) return put(value);
+        failSave = false;
+        transaction.error = new DOMException('Storage quota exceeded', 'QuotaExceededError');
+        queueMicrotask(() => transaction.onabort?.());
+      };
+      return objectStore;
+    };
+    return transaction;
+  };
+  await assert.rejects(copied.saveImportDraft(admin, draft('Unsaved edit')), /Storage quota exceeded/);
+  assert.equal(copiedStorage.getItem(TAB_KEY), originalId);
+  assert.equal(fake.stores.get('drafts').get(originalId).draft.rowEdits['Sheet1::2'].name, 'Original recoverable edit');
+  assert.equal(fake.stores.get('workbooks').size, 1);
+  const restored = await copied.readImportDraft(admin);
+  assert.equal(restored.rowEdits['Sheet1::2'].name, 'Original recoverable edit');
+  assert.equal(await restored.file.text(), 'workbook contents');
+  await copied.clearImportDraft();
+  globalThis.sessionStorage = originalStorage;
+  await first.clearImportDraft();
+  fake.database.onversionchange();
+});
+
+test('Queued saves follow a successful copied-tab fork without dropping the latest edit', async () => {
+  const first = await import('./importDrafts.js?queued-save-first');
+  const copied = await import('./importDrafts.js?queued-save-copied');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.navigator.locks = undefined;
+  const originalStorage = storage();
+  const copiedStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, draft('Original edit'));
+  const originalId = originalStorage.getItem(TAB_KEY);
+  copiedStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = copiedStorage;
+  const earlier = draft('Earlier copied edit');
+  const latest = { ...earlier, rowEdits: { ...earlier.rowEdits,
+    'Sheet1::2': { ...earlier.rowEdits['Sheet1::2'], name: 'Latest copied edit' } } };
+  const saving = [copied.saveImportDraft(admin, earlier), copied.saveImportDraft(admin, latest)];
+  assert.equal(copiedStorage.getItem(TAB_KEY), originalId);
+  assert.deepEqual(await Promise.all(saving), [true, true]);
+  const copiedId = copiedStorage.getItem(TAB_KEY);
+  assert.notEqual(copiedId, originalId);
+  assert.equal(fake.stores.get('drafts').get(copiedId).draft.rowEdits['Sheet1::2'].name, 'Latest copied edit');
+  assert.equal(fake.stores.get('drafts').get(originalId).draft.rowEdits['Sheet1::2'].name, 'Original edit');
+  await copied.clearImportDraft();
+  globalThis.sessionStorage = originalStorage;
+  await first.clearImportDraft();
+  fake.database.onversionchange();
+});
+
+test('Web Locks reuse the draft ID on refresh and fork only an occupied copied tab', async () => {
+  const first = await import('./importDrafts.js?locked-first');
+  const copied = await import('./importDrafts.js?locked-copied');
+  const refreshed = await import('./importDrafts.js?locked-refreshed');
+  const fake = fakeDatabase();
+  globalThis.indexedDB = fake.indexedDB;
+  const locks = new Map();
+  globalThis.navigator.locks = { request: (name, options, callback) => {
+    if (locks.has(name)) return Promise.resolve(callback(null));
+    let release;
+    const stopped = new Promise((resolve) => { release = resolve; });
+    locks.set(name, release);
+    return Promise.race([Promise.resolve(callback({ name })), stopped]).finally(() => { locks.delete(name); });
+  } };
+  const originalStorage = storage();
+  const copiedStorage = storage();
+  globalThis.sessionStorage = originalStorage;
+  await first.saveImportDraft(admin, draft('Locked edit'));
+  const originalId = originalStorage.getItem(TAB_KEY);
+  copiedStorage.setItem(TAB_KEY, originalId);
+  globalThis.sessionStorage = copiedStorage;
+  await copied.readImportDraft(admin);
+  assert.notEqual(copiedStorage.getItem(TAB_KEY), originalId);
+  assert.equal(fake.stores.get('workbooks').size, 1);
+  await copied.clearImportDraft();
+
+  // Closing the old document releases its native lock before refresh hydration.
+  locks.get(`istrom-import:${originalId}`)?.();
+  await Promise.resolve();
+  await Promise.resolve();
+  globalThis.sessionStorage = originalStorage;
+  const restored = await refreshed.readImportDraft(admin);
+  assert.equal(originalStorage.getItem(TAB_KEY), originalId);
+  assert.equal(restored.rowEdits['Sheet1::2'].name, 'Locked edit');
+  await refreshed.clearImportDraft();
+  globalThis.navigator.locks = undefined;
   fake.database.onversionchange();
 });

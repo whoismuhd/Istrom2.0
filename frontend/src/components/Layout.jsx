@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/useAuth';
 import { useQuery } from '@tanstack/react-query';
@@ -129,6 +129,9 @@ const PROJECT_TABS = [
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const active = useRef(false);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   const { user, logout, isAdmin, isGlobalAdmin, projectSite, setProjectSite } = useAuth();
   const navigate = useNavigate();
   const { isLive: isNotificationsLive } = useNotificationSocket();
@@ -154,8 +157,12 @@ export default function Layout() {
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
   const handleLogout = async () => {
-    await logout();
-    navigate('/login');
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      const cleared = await logout();
+      if (active.current && cleared) navigate('/login');
+    } finally { if (active.current) setSigningOut(false); }
   };
 
   const tabs = isAdmin ? ADMIN_TABS.filter((tab) => isGlobalAdmin || !['/users', '/settings'].includes(tab.path)) : PROJECT_TABS;
@@ -234,9 +241,9 @@ export default function Layout() {
             <span className="user-chip-name">{displayName}</span>
           </div>
           <NavLink to="/change-password" className="btn-header-logout" aria-label="Change password" title="Change password">{Icons.settings}<span className="logout-label">Password</span></NavLink>
-          <button className="btn-header-logout" aria-label="Sign out" onClick={handleLogout}>
+          <button className="btn-header-logout" aria-label="Sign out" onClick={handleLogout} disabled={signingOut}>
             {Icons.logout}
-            <span className="logout-label">Sign out</span>
+            <span className="logout-label">{signingOut ? 'Signing out…' : 'Sign out'}</span>
           </button>
         </div>
       </header>

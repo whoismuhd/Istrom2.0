@@ -11,7 +11,10 @@ let databasePromise;
 let operationQueue = Promise.resolve();
 let generation = 0;
 const savedFiles = new Map();
+const savedWorkbookIds = new Map();
 const heldLocks = new Map();
+const ownedDraftIds = new Set();
+const adoptedDraftIds = new Map();
 const isObject = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 const isNumericInput = (value) => value == null || typeof value === 'string' || typeof value === 'number';
 const isTextList = (value) => value == null || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
@@ -95,7 +98,9 @@ export function isCurrentImportDraftIdentity(identity) {
 
 function newKey() {
   if (!globalThis.crypto?.randomUUID) throw new Error('This browser cannot save the import preview.');
-  return `draft-${globalThis.crypto.randomUUID()}`;
+  const id = `draft-${globalThis.crypto.randomUUID()}`;
+  ownedDraftIds.add(id);
+  return id;
 }
 
 function queue(operation) {
@@ -105,7 +110,8 @@ function queue(operation) {
 }
 
 async function holdDraftLock(id) {
-  if (!globalThis.navigator?.locks?.request || heldLocks.has(id)) return true;
+  if (!globalThis.navigator?.locks?.request) return ownedDraftIds.has(id);
+  if (heldLocks.has(id)) return true;
   return new Promise((resolve, reject) => {
     globalThis.navigator.locks.request(`istrom-import:${id}`, { ifAvailable: true }, (lock) => {
       if (!lock) { resolve(false); return; }
@@ -125,10 +131,59 @@ async function claimTabRecord(storage, originalId, operationGeneration) {
   await holdDraftLock(id);
   if (generation !== operationGeneration || storage.getItem(TAB_KEY) !== originalId) {
     heldLocks.get(id)?.();
+    ownedDraftIds.delete(id);
     return null;
   }
-  storage.setItem(TAB_KEY, id);
   return { id, sourceId: originalId };
+}
+
+function currentDraftId(id) {
+  while (adoptedDraftIds.has(id)) id = adoptedDraftIds.get(id);
+  return id;
+}
+
+function publishClaim(storage, claim) {
+  storage.setItem(TAB_KEY, claim.id);
+  if (claim.id !== claim.sourceId) adoptedDraftIds.set(claim.sourceId, claim.id);
+}
+
+async function releaseUnpublishedClaim(storage, claim, wroteRecord) {
+  if (claim.id === claim.sourceId || storage.getItem(TAB_KEY) === claim.id) return;
+  if (wroteRecord) await deleteRecord(claim.id).catch(() => {});
+  else {
+    ownedDraftIds.delete(claim.id);
+    heldLocks.get(claim.id)?.();
+  }
+}
+
+function recordWorkbookId(record, legacyId) {
+  return Object.hasOwn(record, 'workbookId')
+    ? (typeof record.workbookId === 'string' ? record.workbookId : null) : legacyId;
+}
+
+// Draft copies share immutable workbook bytes. Remove a blob only after every
+// draft referring to it has been removed or expired.
+function pruneWorkbooks(transaction) {
+  const drafts = transaction.objectStore(DRAFT_STORE);
+  const workbooks = transaction.objectStore(WORKBOOK_STORE);
+  const referenced = new Set();
+  const draftCursor = drafts.openCursor();
+  draftCursor.onsuccess = () => {
+    const cursor = draftCursor.result;
+    if (cursor) {
+      const id = recordWorkbookId(cursor.value, cursor.primaryKey);
+      if (id) referenced.add(id);
+      cursor.continue();
+      return;
+    }
+    const workbookCursor = workbooks.openCursor();
+    workbookCursor.onsuccess = () => {
+      const workbook = workbookCursor.result;
+      if (!workbook) return;
+      if (!referenced.has(workbook.primaryKey)) workbooks.delete(workbook.primaryKey);
+      workbook.continue();
+    };
+  };
 }
 
 function transactionDone(transaction) {
@@ -143,10 +198,20 @@ function transactionDone(transaction) {
   });
 }
 
-function requestResult(request) {
+function readStoredDraft(transaction, id) {
   return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('Could not read the import preview.'));
+    const recordRequest = transaction.objectStore(DRAFT_STORE).get(id);
+    const failed = (request) => reject(request.error || new Error('Could not read the import preview.'));
+    recordRequest.onerror = () => failed(recordRequest);
+    recordRequest.onsuccess = () => {
+      const record = recordRequest.result;
+      const workbookId = isObject(record) ? recordWorkbookId(record, id) : null;
+      if (!workbookId) { resolve({ record, workbook: null, workbookId }); return; }
+      // Queue the referenced blob read while this same transaction is active.
+      const workbookRequest = transaction.objectStore(WORKBOOK_STORE).get(workbookId);
+      workbookRequest.onerror = () => failed(workbookRequest);
+      workbookRequest.onsuccess = () => resolve({ record, workbook: workbookRequest.result, workbookId });
+    };
   });
 }
 
@@ -154,16 +219,15 @@ async function removeExpired(database) {
   const transaction = database.transaction([DRAFT_STORE, WORKBOOK_STORE], 'readwrite');
   const done = transactionDone(transaction);
   const drafts = transaction.objectStore(DRAFT_STORE);
-  const workbooks = transaction.objectStore(WORKBOOK_STORE);
   const request = drafts.openCursor();
   const cutoff = Date.now() - IMPORT_DRAFT_MAX_AGE;
   request.onsuccess = () => {
     const cursor = request.result;
-    if (!cursor) return;
+    if (!cursor) { pruneWorkbooks(transaction); return; }
     if (!Number.isFinite(cursor.value.savedAt) || cursor.value.savedAt <= cutoff) {
       drafts.delete(cursor.primaryKey);
-      workbooks.delete(cursor.primaryKey);
       savedFiles.delete(cursor.primaryKey);
+      savedWorkbookIds.delete(cursor.primaryKey);
     }
     cursor.continue();
   };
@@ -222,10 +286,12 @@ async function deleteRecord(id) {
     const transaction = database.transaction([DRAFT_STORE, WORKBOOK_STORE], 'readwrite');
     const done = transactionDone(transaction);
     transaction.objectStore(DRAFT_STORE).delete(id);
-    transaction.objectStore(WORKBOOK_STORE).delete(id);
+    pruneWorkbooks(transaction);
     await done;
   } finally {
     savedFiles.delete(id);
+    savedWorkbookIds.delete(id);
+    ownedDraftIds.delete(id);
     heldLocks.get(id)?.();
   }
 }
@@ -240,37 +306,54 @@ export async function readImportDraft(user) {
   }
   const readingGeneration = generation;
   return queue(async () => {
-    if (readingGeneration !== generation || storage.getItem(TAB_KEY) !== id) return null;
-    const claim = await claimTabRecord(storage, id, readingGeneration);
-    if (!claim || readingGeneration !== generation || storage.getItem(TAB_KEY) !== claim.id) return null;
-    const database = await openDatabase();
-    const transaction = database.transaction([DRAFT_STORE, WORKBOOK_STORE], 'readonly');
-    const done = transactionDone(transaction);
-    const [, record, workbook] = await Promise.all([
-      done,
-      requestResult(transaction.objectStore(DRAFT_STORE).get(claim.sourceId)),
-      requestResult(transaction.objectStore(WORKBOOK_STORE).get(claim.sourceId)),
-    ]);
-    if (readingGeneration !== generation || storage.getItem(TAB_KEY) !== claim.id) return null;
-    if (!isImportDraftRecord(record, user)) {
-      storage.removeItem(TAB_KEY);
-      generation += 1;
-      await deleteRecord(claim.id);
-      return null;
+    const sourceId = currentDraftId(id);
+    if (readingGeneration !== generation || storage.getItem(TAB_KEY) !== sourceId) return null;
+    const claim = await claimTabRecord(storage, sourceId, readingGeneration);
+    if (!claim) return null;
+    let wroteRecord = false;
+    try {
+      if (readingGeneration !== generation || storage.getItem(TAB_KEY) !== sourceId) return null;
+      const database = await openDatabase();
+      const transaction = database.transaction([DRAFT_STORE, WORKBOOK_STORE], 'readonly');
+      const done = transactionDone(transaction);
+      const [, { record, workbook, workbookId }] = await Promise.all([done, readStoredDraft(transaction, claim.sourceId)]);
+      if (readingGeneration !== generation || storage.getItem(TAB_KEY) !== sourceId) return null;
+      if (!isImportDraftRecord(record, user)) {
+        storage.removeItem(TAB_KEY);
+        generation += 1;
+        adoptedDraftIds.clear();
+        if (claim.id === claim.sourceId) await deleteRecord(claim.id);
+        return null;
+      }
+      const savedFile = workbookId ? workbook?.file : null;
+      const file = isWorkbookFile(savedFile)
+        && (record.draft.stage !== 'workbook' || savedFile.name === record.draft.fileName) ? savedFile : null;
+      if (claim.id !== claim.sourceId) {
+        const copying = database.transaction([DRAFT_STORE, WORKBOOK_STORE], 'readwrite');
+        const copied = transactionDone(copying);
+        wroteRecord = true;
+        copying.objectStore(DRAFT_STORE).put({ ...record, id: claim.id, workbookId: file ? workbookId : null });
+        if (file) {
+          const workbooks = copying.objectStore(WORKBOOK_STORE);
+          const existing = workbooks.get(workbookId);
+          existing.onsuccess = () => {
+            // The source tab may have cleared its record after our first read.
+            // Keep the bytes and new reference together in this transaction.
+            if (!existing.result) workbooks.put({ id: workbookId, file });
+          };
+        }
+        await copied;
+        if (readingGeneration !== generation || storage.getItem(TAB_KEY) !== sourceId) return null;
+        // Keep the inherited pointer recoverable until its isolated copy exists.
+        publishClaim(storage, claim);
+      }
+      if (readingGeneration !== generation || storage.getItem(TAB_KEY) !== claim.id) return null;
+      savedFiles.set(claim.id, file);
+      savedWorkbookIds.set(claim.id, file ? workbookId : null);
+      return { ...record.draft, file };
+    } finally {
+      await releaseUnpublishedClaim(storage, claim, wroteRecord);
     }
-    const savedFile = workbook?.file;
-    const file = isWorkbookFile(savedFile)
-      && (record.draft.stage !== 'workbook' || savedFile.name === record.draft.fileName) ? savedFile : null;
-    if (claim.id !== claim.sourceId) {
-      const copying = database.transaction([DRAFT_STORE, WORKBOOK_STORE], 'readwrite');
-      const copied = transactionDone(copying);
-      copying.objectStore(DRAFT_STORE).put({ ...record, id: claim.id });
-      if (file) copying.objectStore(WORKBOOK_STORE).put({ id: claim.id, file });
-      await copied;
-    }
-    if (readingGeneration !== generation || storage.getItem(TAB_KEY) !== claim.id) return null;
-    savedFiles.set(claim.id, file);
-    return { ...record.draft, file };
   });
 }
 
@@ -288,23 +371,37 @@ export async function saveImportDraft(user, draft) {
   const writingGeneration = generation;
   const { file = null, ...metadata } = draft;
   return queue(async () => {
+    id = currentDraftId(id);
     if (writingGeneration !== generation || storage.getItem(TAB_KEY) !== id) return false;
     const claim = await claimTabRecord(storage, id, writingGeneration);
     if (!claim) return false;
-    id = claim.id;
-    const database = await openDatabase();
-    if (writingGeneration !== generation || storage.getItem(TAB_KEY) !== id) return false;
-    const transaction = database.transaction([DRAFT_STORE, WORKBOOK_STORE], 'readwrite');
-    const done = transactionDone(transaction);
-    transaction.objectStore(DRAFT_STORE).put({ id, version: RECORD_VERSION, owner, savedAt: Date.now(), draft: metadata });
-    // The original workbook can be 15 MB. Table edits only rewrite metadata.
-    if (!savedFiles.has(id) || savedFiles.get(id) !== file) {
-      if (file) transaction.objectStore(WORKBOOK_STORE).put({ id, file });
-      else transaction.objectStore(WORKBOOK_STORE).delete(id);
+    let wroteRecord = false;
+    try {
+      const database = await openDatabase();
+      if (writingGeneration !== generation || storage.getItem(TAB_KEY) !== id) return false;
+      const transaction = database.transaction([DRAFT_STORE, WORKBOOK_STORE], 'readwrite');
+      const done = transactionDone(transaction);
+      const changedFile = !savedFiles.has(claim.id) || savedFiles.get(claim.id) !== file;
+      const workbookId = file ? (changedFile
+        ? (savedFiles.has(claim.id) ? `workbook-${globalThis.crypto.randomUUID()}` : claim.id)
+        : savedWorkbookIds.get(claim.id) || claim.id) : null;
+      wroteRecord = true;
+      transaction.objectStore(DRAFT_STORE).put({ id: claim.id, version: RECORD_VERSION, owner,
+        savedAt: Date.now(), workbookId, draft: metadata });
+      // The original workbook can be 15 MB. Table edits only rewrite metadata.
+      if (changedFile) {
+        if (file) transaction.objectStore(WORKBOOK_STORE).put({ id: workbookId, file });
+        pruneWorkbooks(transaction);
+      }
+      await done;
+      if (writingGeneration !== generation || storage.getItem(TAB_KEY) !== id) return false;
+      if (claim.id !== claim.sourceId) publishClaim(storage, claim);
+      savedFiles.set(claim.id, file);
+      savedWorkbookIds.set(claim.id, workbookId);
+      return true;
+    } finally {
+      await releaseUnpublishedClaim(storage, claim, wroteRecord);
     }
-    await done;
-    savedFiles.set(id, file);
-    return true;
   });
 }
 
@@ -315,6 +412,7 @@ export async function clearImportDraft(expectedIdentity) {
   // Remove the pointer before waiting for old writes, so a refresh cannot restore it.
   storage.removeItem(TAB_KEY);
   generation += 1;
+  adoptedDraftIds.clear();
   if (!id) return true;
   return queue(async () => {
     // A copied tab may sign out before its preview has hydrated and forked.

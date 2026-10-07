@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { expireSession } from '../api';
+import { useAuth } from '../contexts/useAuth';
+import { workspaceGeneration } from '../utils/workspaceState';
 
 const WS_RECONNECT_BASE_MS = 1500;
 const WS_RECONNECT_MAX_MS = 15000;
@@ -37,11 +39,12 @@ function createOrGetAudioContext(existingContext) {
   return new Ctx();
 }
 
-async function playNotificationChime(audioContext) {
-  if (!audioContext) return;
+async function playNotificationChime(audioContext, isCurrentSession) {
+  if (!audioContext || !isCurrentSession()) return;
   if (audioContext.state === 'suspended') {
     await audioContext.resume();
   }
+  if (!isCurrentSession()) return;
 
   const now = audioContext.currentTime;
   const master = audioContext.createGain();
@@ -67,7 +70,11 @@ async function playNotificationChime(audioContext) {
 
 export default function useNotificationSocket() {
   const queryClient = useQueryClient();
-  const [isLive, setIsLive] = useState(() => false);
+  const { user } = useAuth();
+  const token = user ? sessionStorage.getItem('istrom_token') : null;
+  const sessionGeneration = workspaceGeneration();
+  const [liveSession, setLiveSession] = useState(null);
+  const isLive = Boolean(token && liveSession?.token === token && liveSession.generation === sessionGeneration);
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const pingTimerRef = useRef(null);
@@ -77,12 +84,13 @@ export default function useNotificationSocket() {
   const hasAudioInteractionRef = useRef(false);
 
   useEffect(() => {
-    const token = sessionStorage.getItem('istrom_token');
     if (!token) {
       return undefined;
     }
 
     let closedByClient = false;
+    const isCurrentSession = () => !closedByClient
+      && token === sessionStorage.getItem('istrom_token') && sessionGeneration === workspaceGeneration();
 
     const clearTimers = () => {
       if (reconnectTimerRef.current) {
@@ -96,6 +104,7 @@ export default function useNotificationSocket() {
     };
 
     const unlockAudio = async () => {
+      if (!isCurrentSession()) return;
       try {
         const context = createOrGetAudioContext(audioContextRef.current);
         if (!context) return;
@@ -103,6 +112,7 @@ export default function useNotificationSocket() {
         if (context.state === 'suspended') {
           await context.resume();
         }
+        if (!isCurrentSession()) return;
         hasAudioInteractionRef.current = true;
       } catch {
         // Ignore unlock failures; browser gesture policy can block until a later interaction.
@@ -110,6 +120,7 @@ export default function useNotificationSocket() {
     };
 
     const maybePlayAlertSound = async (eventType) => {
+      if (!isCurrentSession()) return;
       if (eventType !== 'notification_created') return;
       if (!hasAudioInteractionRef.current) return;
       const nowMs = Date.now();
@@ -119,7 +130,8 @@ export default function useNotificationSocket() {
         const context = createOrGetAudioContext(audioContextRef.current);
         if (!context) return;
         audioContextRef.current = context;
-        await playNotificationChime(context);
+        await playNotificationChime(context, isCurrentSession);
+        if (!isCurrentSession()) return;
         lastSoundAtRef.current = nowMs;
       } catch {
         // Ignore audio playback failures and keep notifications functional.
@@ -127,6 +139,7 @@ export default function useNotificationSocket() {
     };
 
     const invalidateNotificationQueries = () => {
+      if (!isCurrentSession()) return;
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
       for (const key of ['dashboard', 'items', 'requests', 'actuals', 'deletedRequests', 'projectSites', 'users', 'accessLogs']) {
         queryClient.invalidateQueries({ queryKey: [key] });
@@ -134,7 +147,7 @@ export default function useNotificationSocket() {
     };
 
     const scheduleReconnect = () => {
-      if (closedByClient) return;
+      if (!isCurrentSession()) return;
       const attempt = reconnectAttemptRef.current;
       const delay = Math.min(WS_RECONNECT_BASE_MS * (2 ** attempt), WS_RECONNECT_MAX_MS);
       reconnectAttemptRef.current += 1;
@@ -142,15 +155,17 @@ export default function useNotificationSocket() {
     };
 
     const connect = () => {
+      if (!isCurrentSession()) return;
       clearTimers();
 
       try {
         const socketUrl = buildNotificationSocketUrl();
         const ws = new WebSocket(socketUrl);
         wsRef.current = ws;
+        const isCurrentSocket = () => isCurrentSession() && wsRef.current === ws;
 
         ws.onopen = () => {
-          if (closedByClient) {
+          if (!isCurrentSocket()) {
             ws.close(1000, 'client_shutdown');
             return;
           }
@@ -158,15 +173,15 @@ export default function useNotificationSocket() {
         };
 
         ws.onmessage = (event) => {
-          if (closedByClient) return;
+          if (!isCurrentSocket()) return;
           try {
             const payload = JSON.parse(event.data);
             if (payload?.type === 'connected') {
               reconnectAttemptRef.current = 0;
-              setIsLive(true);
+              setLiveSession({ token, generation: sessionGeneration });
               invalidateNotificationQueries();
               pingTimerRef.current = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+                if (isCurrentSocket() && ws.readyState === WebSocket.OPEN) ws.send('ping');
               }, WS_PING_INTERVAL_MS);
             }
             maybePlayAlertSound(payload?.type);
@@ -183,8 +198,8 @@ export default function useNotificationSocket() {
         };
 
         ws.onclose = (event) => {
-          if (closedByClient) return;
-          setIsLive(false);
+          if (!isCurrentSocket()) return;
+          setLiveSession(null);
           clearTimers();
           if (event.code === 1008) {
             closedByClient = true;
@@ -195,7 +210,8 @@ export default function useNotificationSocket() {
           scheduleReconnect();
         };
       } catch {
-        setIsLive(false);
+        if (!isCurrentSession()) return;
+        setLiveSession(null);
         scheduleReconnect();
       }
     };
@@ -212,21 +228,22 @@ export default function useNotificationSocket() {
       window.removeEventListener('keydown', unlockAudio);
       const ws = wsRef.current;
       wsRef.current = null;
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && [WebSocket.OPEN, WebSocket.CONNECTING].includes(ws.readyState)) {
         ws.close(1000, 'client_shutdown');
       }
     };
-  }, [queryClient]);
+  }, [queryClient, token, sessionGeneration]);
 
   useEffect(() => {
-    if (isLive) return undefined;
+    if (isLive || !token) return undefined;
     const timer = setInterval(() => {
+      if (token !== sessionStorage.getItem('istrom_token') || sessionGeneration !== workspaceGeneration()) return;
       for (const key of ['dashboard', 'items', 'requests', 'actuals', 'deletedRequests', 'projectSites', 'users', 'accessLogs']) {
         queryClient.invalidateQueries({ queryKey: [key] });
       }
     }, 30000);
     return () => clearInterval(timer);
-  }, [isLive, queryClient]);
+  }, [isLive, queryClient, token, sessionGeneration]);
 
   return { isLive };
 }
