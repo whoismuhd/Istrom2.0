@@ -20,10 +20,25 @@
 .sidebar-brand { min-height: var(--header-h); padding: 8px 22px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; border-bottom: 1px solid #ffffff12; gap: 3px; }
 .sidebar-brand .istrom-logo { font-size: 21px; }
 .sidebar-brand > span:last-child { display: block; font-size: 10px; color: #e7a180; }
-.role-project-site { --accent-orange: #315b87; --accent-orange-strong: #24476c; --accent-safety: #96bfdf; --accent-text: #315b87; }
-:root[data-theme='dark'] .role-project-site { --accent-text: #a2c9f0; }
+.role-project-site {
+  --accent-orange: #315b87; --accent-orange-strong: #24476c; --accent-safety: #96bfdf; --accent-text: #315b87;
+  --site-detail-surface: #edf3f8; --site-detail-line: #d6e2ee; --site-detail-ink: #315b87;
+  --site-grid-line: rgb(49 91 135 / 5%);
+}
+:root[data-theme='dark'] .role-project-site {
+  --accent-text: #a2c9f0;
+  --site-detail-surface: #1d3045; --site-detail-line: #354d66; --site-detail-ink: #a2c9f0;
+  --site-grid-line: rgb(162 201 240 / 6%);
+}
 .role-project-site .app-sidebar { background: var(--sidebar-site); }
 .role-project-site .sidebar-brand > span:last-child, .role-project-site .sidebar-link.active .sidebar-icon { color: #b2d1e9; }
+.role-project-site .sidebar-site-block {
+  background-image: linear-gradient(rgb(178 209 233 / 4%) 1px, transparent 1px), linear-gradient(90deg, rgb(178 209 233 / 4%) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+.role-project-site .sidebar-link[href='/request']:not(.active) { border: 1px solid #b2d1e92a; background: #b2d1e909; }
+.role-project-site .sidebar-link[href='/request']:hover, .role-project-site .sidebar-link:focus-visible { background: #b2d1e915; }
+.role-project-site .sidebar-footer-avatar { background: #b2d1e910; border: 1px solid #b2d1e92a; color: #cce2f2; }
 .sidebar-site-block { padding: 16px 22px; border-bottom: 1px solid #ffffff12; }
 .sidebar-site-label { display: block; color: #98a9be; font-size: 11px; margin-bottom: 3px; }
 .sidebar-site-name { display: block; font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

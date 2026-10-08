@@ -53,7 +53,51 @@
 .dashboard-update-row strong { font-size: 13px; font-weight: 500; }
 .dashboard-update-row p { margin: 5px 0 0; font-size: 12px; color: var(--text-muted); }
 .dashboard-update-row time { flex-shrink: 0; color: var(--text-muted); font-size: 11px; }
+
+.role-project-site .dashboard-page .page-heading {
+  position: relative;
+  isolation: isolate;
+  align-items: center;
+  padding: 18px 22px;
+  border: 1px solid var(--site-detail-line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.role-project-site .dashboard-page .page-heading::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: linear-gradient(var(--site-grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--site-grid-line) 1px, transparent 1px);
+  background-size: 20px 20px;
+  mask-image: linear-gradient(90deg, transparent 25%, #000);
+}
+.role-project-site .dashboard-page .page-heading h1 { margin-bottom: 0; }
+.role-project-site .dashboard-kpi { border-radius: 10px; }
+.role-project-site .dashboard-kpi:first-child { border-top: 2px solid var(--site-detail-ink); padding-top: 19px; }
+.role-project-site .dashboard-kpi-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; }
+.site-detail-icon { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 8px; background: var(--site-detail-surface); color: var(--site-detail-ink); }
+.role-project-site .dashboard-actions { margin-top: 14px; }
+.role-project-site .dashboard-action-link { gap: 12px; padding: 12px 8px; border-radius: 8px; border-bottom: 0; transition: background 140ms ease; }
+.role-project-site .dashboard-action-link > div { flex: 1; min-width: 0; }
+.role-project-site .dashboard-action-link .action-arrow { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; color: var(--site-detail-ink); transition: background 140ms ease, transform 140ms ease; }
+.role-project-site .dashboard-action-link:hover, .role-project-site .dashboard-action-link:focus-visible { background: var(--panel-soft); }
+.role-project-site .dashboard-action-link:hover .action-arrow, .role-project-site .dashboard-action-link:focus-visible .action-arrow { background: var(--site-detail-surface); transform: translateX(2px); }
+
 @media (max-width: 1150px) { .dashboard-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .dashboard-grid, .dashboard-grid-secondary { grid-template-columns: 1fr; } .dashboard-update-row { flex-direction: column; gap: 8px; } }
 @media (max-width: 460px) { .dashboard-kpi { padding: 16px; } .dashboard-kpi-grid { gap: 10px; } .dashboard-kpi-value { font-size: 21px; } .dashboard-page .card { padding: 18px; } .trend-total { display: none; } }
 @media (max-width: 360px) { .dashboard-kpi-grid { grid-template-columns: 1fr; } }
+@media (max-width: 600px) {
+  .role-project-site .dashboard-page .page-heading { align-items: flex-start; padding: 18px; }
+  .role-project-site .dashboard-page .page-heading::before { display: none; }
+}
+@media (max-width: 460px) {
+  .role-project-site .dashboard-kpi:first-child { padding-top: 15px; }
+  .role-project-site .dashboard-kpi-heading { min-height: 36px; gap: 6px; }
+  .role-project-site .dashboard-kpi .site-detail-icon { width: 26px; height: 26px; border-radius: 6px; }
+  .role-project-site .dashboard-request-row { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .role-project-site .dashboard-request-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+}

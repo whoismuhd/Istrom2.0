@@ -10,6 +10,24 @@ import { useAuth } from '../contexts/useAuth';
 import { api, formatDate, formatNaira } from '../api';
 import './Dashboard.css';
 
+const siteIconPaths = {
+  inventory: <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="M3 8v9l9 5 9-5V8M12 13v9M7.5 5.5l9 5" /></>,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  items: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
+  request: <><circle cx="12" cy="12" r="9" /><path d="M12 8v8M8 12h8" /></>,
+  budget: <><path d="M5 20V13M12 20V4M19 20V9" /></>,
+  actuals: <><path d="m3 17 6-6 4 4 8-9M15 6h6v6" /></>,
+  notifications: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M10 21h4" /></>,
+};
+
+function SiteIcon({ name }) {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{siteIconPaths[name]}</svg>;
+}
+
+function MetricLabel({ children, icon, isAdmin }) {
+  return <div className="dashboard-kpi-heading"><span className="dashboard-kpi-label">{children}</span>{!isAdmin && <span className="site-detail-icon"><SiteIcon name={icon} /></span>}</div>;
+}
+
 export default function Dashboard() {
   const { isAdmin, isGlobalAdmin, getEffectiveProjectSite } = useAuth();
   const effectiveSite = getEffectiveProjectSite();
@@ -57,13 +75,13 @@ export default function Dashboard() {
   const trendPeak = Math.max(1, ...trend.flatMap((day) => [day.incoming, day.approved, day.rejected]));
   const hasActivity = trend.some((day) => day.total > 0);
   const quickLinks = [
-    { to: '/inventory', title: 'Inventory', detail: 'Original quantities and costs' },
-    { to: '/budget-summary', title: 'Budget summary', detail: 'Planned costs by building and budget' },
-    { to: '/actuals', title: 'Actuals', detail: 'Usage, remaining quantities, and actual costs' },
+    { to: '/inventory', title: 'Inventory', detail: 'Original quantities and costs', icon: 'inventory' },
+    { to: '/budget-summary', title: 'Budget summary', detail: 'Planned costs by building and budget', icon: 'budget' },
+    { to: '/actuals', title: 'Actuals', detail: 'Usage, remaining quantities, and actual costs', icon: 'actuals' },
     ...(isGlobalAdmin ? [
       { to: '/users', title: 'Users', detail: 'Site accounts and project assignments' },
       { to: '/settings', title: 'Project settings', detail: 'Sites and activity logs' },
-    ] : [{ to: '/notifications', title: 'Notifications', detail: 'Request updates for your site' }]),
+    ] : [{ to: '/notifications', title: 'Notifications', detail: 'Request updates for your site', icon: 'notifications' }]),
   ];
 
   return <div className="dashboard-page">
@@ -71,15 +89,15 @@ export default function Dashboard() {
       <div><DashboardDateTime /><h1>{isAdmin ? 'Admin dashboard' : 'Site dashboard'}</h1></div>
       <div className="page-heading-actions">
         {isAdmin && <Link className="btn btn-secondary" to="/bulk-upload">Import workbook</Link>}
-        <Link className="btn btn-primary" to={isAdmin ? '/review' : '/request'}>{isAdmin ? 'Review requests' : 'New request'}</Link>
+        <Link className="btn btn-primary" to={isAdmin ? '/review' : '/request'}>{!isAdmin && <SiteIcon name="request" />}{isAdmin ? 'Review requests' : 'New request'}</Link>
       </div>
     </div>
 
     <div className="dashboard-kpi-grid">
-      <div className="dashboard-kpi"><span className="dashboard-kpi-label">Original inventory value</span><strong className="dashboard-kpi-value">{formatNaira(originalValue)}</strong><span className="dashboard-kpi-note">{items.length} inventory items{isGlobalAdmin && !effectiveSite ? ` across ${sites.length} active ${sites.length === 1 ? 'site' : 'sites'}` : ''}</span></div>
-      <div className="dashboard-kpi"><span className="dashboard-kpi-label">Pending requests</span><strong className="dashboard-kpi-value">{pending.length}</strong></div>
-      <div className="dashboard-kpi"><span className="dashboard-kpi-label">Inventory items</span><strong className="dashboard-kpi-value">{items.length}</strong></div>
-      <div className="dashboard-kpi"><span className="dashboard-kpi-label">{isAdmin ? 'Approved today' : 'Submitted today'}</span><strong className="dashboard-kpi-value">{isAdmin ? approvedToday : submittedToday}</strong></div>
+      <div className="dashboard-kpi"><MetricLabel icon="inventory" isAdmin={isAdmin}>Original inventory value</MetricLabel><strong className="dashboard-kpi-value">{formatNaira(originalValue)}</strong><span className="dashboard-kpi-note">{items.length} inventory items{isGlobalAdmin && !effectiveSite ? ` across ${sites.length} active ${sites.length === 1 ? 'site' : 'sites'}` : ''}</span></div>
+      <div className="dashboard-kpi"><MetricLabel icon="clock" isAdmin={isAdmin}>Pending requests</MetricLabel><strong className="dashboard-kpi-value">{pending.length}</strong></div>
+      <div className="dashboard-kpi"><MetricLabel icon="items" isAdmin={isAdmin}>Inventory items</MetricLabel><strong className="dashboard-kpi-value">{items.length}</strong></div>
+      <div className="dashboard-kpi"><MetricLabel icon="request" isAdmin={isAdmin}>{isAdmin ? 'Approved today' : 'Submitted today'}</MetricLabel><strong className="dashboard-kpi-value">{isAdmin ? approvedToday : submittedToday}</strong></div>
     </div>
 
     <div className="dashboard-grid">
@@ -120,7 +138,7 @@ export default function Dashboard() {
       </section>
       <section className="card">
         <h2>Workspace</h2>
-        <div className="dashboard-actions">{quickLinks.map((link) => <Link key={link.to} to={link.to} className="dashboard-action-link"><div><strong>{link.title}</strong><span>{link.detail}</span></div><span className="action-arrow" aria-hidden="true">→</span></Link>)}</div>
+        <div className="dashboard-actions">{quickLinks.map((link) => <Link key={link.to} to={link.to} className="dashboard-action-link">{!isAdmin && <span className="site-detail-icon"><SiteIcon name={link.icon} /></span>}<div><strong>{link.title}</strong><span>{link.detail}</span></div><span className="action-arrow" aria-hidden="true">→</span></Link>)}</div>
       </section>
     </div>
 
